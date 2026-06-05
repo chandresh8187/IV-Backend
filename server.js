@@ -3,42 +3,43 @@ const cors = require("cors");
 const http = require("http");
 require("dotenv").config();
 
-const authRoutes = require("./routes/authRoutes");
-const shiftRoutes = require("./routes/shiftRoutes");
-const productionRoutes = require("./routes/productionRoutes");
-const dashboardRoutes = require("./routes/dashboardRoutes");
-const supervisorRoutes = require("./routes/supervisorRoutes");
-const userRoutes = require("./routes/userRoutes");
-const productionHistoryRoutes = require("./routes/productionHistoryRoutes");
+// const authRoutes = require("./routes/authRoutes");
+// const shiftRoutes = require("./routes/shiftRoutes");
+// const productionRoutes = require("./routes/productionRoutes");
+// const dashboardRoutes = require("./routes/dashboardRoutes");
+// const supervisorRoutes = require("./routes/supervisorRoutes");
+// const userRoutes = require("./routes/userRoutes");
+// const productionHistoryRoutes = require("./routes/productionHistoryRoutes");
+
+const { Server } = require("socket.io");
 
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+  }),
+);
+
 app.use(express.json());
 
-app.get("/api", (req, res) => {
-  res.json({
-    success: true,
-    message: "API working",
-  });
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "IV backend running" });
 });
 
-app.use("/api/auth", authRoutes);
-app.use("/api/shifts", shiftRoutes);
-app.use("/api/productions", productionRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/supervisors", supervisorRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/production-history", productionHistoryRoutes);
+app.get("/api", (req, res) => {
+  res.json({ success: true, message: "API working" });
+});
 
 const server = http.createServer(app);
-
-const { Server } = require("socket.io");
 
 const io = new Server(server, {
   cors: {
     origin: "*",
+    methods: ["GET", "POST"],
   },
+  transports: ["polling", "websocket"],
 });
 
 app.set("io", io);
@@ -46,13 +47,26 @@ app.set("io", io);
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
-  socket.on("disconnect", () => {
-    console.log("Socket disconnected:", socket.id);
+  socket.emit("socket_connected", {
+    success: true,
+    socketId: socket.id,
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("Socket disconnected:", reason);
   });
 });
 
+// routes below
+app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/productions", require("./routes/productionRoutes"));
+app.use("/api/dashboard", require("./routes/dashboardRoutes"));
+app.use("/api/shifts", require("./routes/shiftRoutes"));
+app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
+
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on ${PORT}`);
 });

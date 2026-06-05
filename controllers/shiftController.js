@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { sendNotificationToRoles } = require("../utils/sendNotification");
 
 const getNextShift = (shift) => {
   return shift === "day" ? "night" : "day";
@@ -95,6 +96,17 @@ const toggleShift = async (req, res) => {
         shift_date: shiftDate,
       });
 
+      await sendNotificationToRoles({
+        roles: ["admin", "superadmin"],
+        title: "Shift Started",
+        body: `${currentShift} shift started`,
+        data: {
+          type: "shift_started",
+          shift_id: result.insertId,
+          shift_name: currentShift,
+        },
+      });
+
       return res.status(201).json({
         success: true,
         action: "started",
@@ -117,7 +129,6 @@ const toggleShift = async (req, res) => {
     // END SHIFT
     const activeShift = activeShiftRows[0];
     const nextShift = getNextShift(activeShift.shift_name);
-
     await connection.query(
       `
       UPDATE shifts
@@ -147,6 +158,17 @@ const toggleShift = async (req, res) => {
       ended_shift: activeShift.shift_name,
       next_shift: nextShift,
       shift_date: activeShift.shift_date,
+    });
+
+    await sendNotificationToRoles({
+      roles: ["admin", "superadmin"],
+      title: "Shift Ended",
+      body: `${activeShift.shift_name} shift ended`,
+      data: {
+        type: "shift_ended",
+        shift_id: activeShift.id,
+        next_shift: nextShift,
+      },
     });
 
     return res.json({
