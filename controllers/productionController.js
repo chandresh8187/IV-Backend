@@ -74,7 +74,7 @@ const saveProductionEntry = async (req, res) => {
       });
     }
 
-    if (!["basic", "dip", "weight", "coating"].includes(entry_type)) {
+    if (!["basic", "dip", "weight", "coating", "full"].includes(entry_type)) {
       return res.status(400).json({
         success: false,
         message: "Invalid entry_type",
@@ -111,6 +111,214 @@ const saveProductionEntry = async (req, res) => {
     );
 
     const existingRow = existingRows.length > 0 ? existingRows[0] : null;
+
+    // FULL ENTRY
+    if (entry_type === "full") {
+      if (!challan_no || !party_name || !material) {
+        return res.status(400).json({
+          success: false,
+          message: "challan_no, party_name and material are required",
+        });
+      }
+
+      const zincPercentage = calculateZincPercentage(ms_weight, gi_weight);
+
+      const productionWeight = calculateProductionWeight(
+        dipping_qty,
+        ms_weight,
+      );
+
+      const avgCoating = calculateAvgCoating([c1, c2, c3, c4, c5]);
+
+      if (existingRow) {
+        await db.query(
+          `
+      UPDATE production_entries
+      SET
+        challan_no = ?,
+        party_name = ?,
+        material = ?,
+        production_time = ?,
+        dipping_qty = ?,
+        kettle_temperature = ?,
+        ms_weight = ?,
+        gi_weight = ?,
+        zinc_percentage = ?,
+        production_weight = ?,
+        c1 = ?,
+        c2 = ?,
+        c3 = ?,
+        c4 = ?,
+        c5 = ?,
+        avg_coating = ?,
+        updated_by = ?
+      WHERE id = ?
+      `,
+          [
+            challan_no,
+            party_name,
+            material,
+            production_time || null,
+            dipping_qty || 0,
+            kettle_temperature || null,
+            ms_weight || null,
+            gi_weight || null,
+            zincPercentage,
+            productionWeight,
+            c1 || null,
+            c2 || null,
+            c3 || null,
+            c4 || null,
+            c5 || null,
+            avgCoating,
+            req.user.id,
+            existingRow.id,
+          ],
+        );
+
+        io.emit("production_updated", {
+          action: "full_updated",
+          type: "updated",
+          shift_id: activeShift.id,
+          shift_date: activeShift.shift_date,
+          shift_name: activeShift.shift_name,
+          sr_no: Number(sr_no),
+        });
+
+        return res.json({
+          success: true,
+          action: "updated",
+          message: "Production entry updated successfully",
+          data: {
+            zinc_percentage: zincPercentage,
+            production_weight: productionWeight,
+            avg_coating: avgCoating,
+          },
+        });
+      }
+
+      const [lastRows] = await db.query(
+        `
+    SELECT sr_no, material, row_type
+    FROM production_entries
+    WHERE shift_id = ?
+    ORDER BY sr_no DESC
+    LIMIT 1
+    `,
+        [activeShift.id],
+      );
+
+      const lastRow = lastRows[0];
+
+      let createdSummaryRow = null;
+
+      if (
+        lastRow &&
+        lastRow.row_type === "entry" &&
+        lastRow.material &&
+        material &&
+        lastRow.material.toLowerCase() !== material.toLowerCase()
+      ) {
+        createdSummaryRow = await createMaterialSummaryRow({
+          connection: db,
+          shiftId: activeShift.id,
+          shiftDate: activeShift.shift_date,
+          shiftName: activeShift.shift_name,
+          material: lastRow.material,
+          createdBy: req.user.id,
+        });
+      }
+
+      const [nextSrRows] = await db.query(
+        `
+    SELECT COALESCE(MAX(sr_no), 0) + 1 AS next_sr_no
+    FROM production_entries
+    WHERE shift_id = ?
+    `,
+        [activeShift.id],
+      );
+
+      const nextSrNo = nextSrRows[0].next_sr_no;
+
+      const [result] = await db.query(
+        `
+    INSERT INTO production_entries
+    (
+      shift_id,
+      shift_date,
+      shift_name,
+      sr_no,
+      challan_no,
+      party_name,
+      material,
+      production_time,
+      dipping_qty,
+      kettle_temperature,
+      ms_weight,
+      gi_weight,
+      zinc_percentage,
+      production_weight,
+      c1,
+      c2,
+      c3,
+      c4,
+      c5,
+      avg_coating,
+      row_type,
+      created_by
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?)
+    `,
+        [
+          activeShift.id,
+          activeShift.shift_date,
+          activeShift.shift_name,
+          nextSrNo,
+          challan_no,
+          party_name,
+          material,
+          production_time || null,
+          dipping_qty || 0,
+          kettle_temperature || null,
+          ms_weight || null,
+          gi_weight || null,
+          zincPercentage,
+          productionWeight,
+          c1 || null,
+          c2 || null,
+          c3 || null,
+          c4 || null,
+          c5 || null,
+          avgCoating,
+          req.user.id,
+        ],
+      );
+
+      io.emit("production_updated", {
+        action: "full_created",
+        type: "created",
+        production_id: result.insertId,
+        summary_row: createdSummaryRow,
+        shift_id: activeShift.id,
+        shift_date: activeShift.shift_date,
+        shift_name: activeShift.shift_name,
+        sr_no: Number(nextSrNo),
+      });
+
+      return res.status(201).json({
+        success: true,
+        action: "created",
+        message: "Production entry created successfully",
+        data: {
+          production_id: result.insertId,
+          sr_no: nextSrNo,
+          summary_row: createdSummaryRow,
+          zinc_percentage: zincPercentage,
+          production_weight: productionWeight,
+          avg_coating: avgCoating,
+        },
+      });
+    }
 
     // BASIC ENTRY
     if (entry_type === "basic") {

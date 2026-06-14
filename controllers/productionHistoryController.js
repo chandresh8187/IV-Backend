@@ -1,172 +1,204 @@
 const db = require("../config/db");
 
+const toNumber = (value) => Number(value || 0);
+
+const formatPercent = (giTotal, msTotal) => {
+  const ms = toNumber(msTotal);
+  const gi = toNumber(giTotal);
+
+  if (!ms || ms <= 0) return "0.00";
+
+  return (((gi - ms) / ms) * 100).toFixed(2);
+};
+
 const getProductionHistory = async (req, res) => {
   try {
-    const {
-      from_date,
-      to_date,
-      month,
-      year,
-      shift_name,
-      supervisor_id,
-      material,
-    } = req.query;
+    const { date, shift_name, material } = req.query;
 
-    let where = `WHERE 1 = 1`;
-    const params = [];
-
-    if (from_date && to_date) {
-      where += ` AND DATE(pe.shift_date) BETWEEN ? AND ?`;
-      params.push(from_date, to_date);
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: "date is required",
+      });
     }
 
-    if (month && year) {
-      where += ` AND MONTH(DATE(pe.shift_date)) = ? AND YEAR(DATE(pe.shift_date)) = ?`;
-      params.push(Number(month), Number(year));
+    if (!shift_name) {
+      return res.status(400).json({
+        success: false,
+        message: "shift_name is required",
+      });
     }
 
-    if (shift_name) {
-      where += ` AND pe.shift_name = ?`;
-      params.push(shift_name);
+    if (!["day", "night"].includes(shift_name)) {
+      return res.status(400).json({
+        success: false,
+        message: "shift_name must be day or night",
+      });
     }
 
-    if (supervisor_id) {
-      where += ` AND pe.created_by = ?`;
-      params.push(supervisor_id);
-    }
+    let materialCondition = "";
+    const materialParams = [];
 
     if (material) {
-      where += ` AND pe.material LIKE ?`;
-      params.push(`%${material}%`);
+      materialCondition = " AND material LIKE ?";
+      materialParams.push(`%${material}%`);
     }
 
-    const [rows] = await db.query(
+    const [tableData] = await db.query(
       `
       SELECT
-        pe.*,
-        DATE_FORMAT(pe.shift_date, '%Y-%m-%d') AS shift_date,
-        creator.name AS supervisor_name,
-        creator.email AS supervisor_email
-      FROM production_entries pe
-      LEFT JOIN users creator ON creator.id = pe.created_by
-      ${where}
-      ORDER BY pe.shift_date DESC, pe.shift_name ASC, pe.sr_no ASC
+        id,
+        shift_id,
+        DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date,
+        shift_name,
+        sr_no,
+        challan_no,
+        party_name,
+        material,
+        row_type,
+        production_time,
+        dipping_qty,
+        kettle_temperature,
+        ms_weight,
+        gi_weight,
+        zinc_percentage,
+        production_weight,
+        c1,
+        c2,
+        c3,
+        c4,
+        c5,
+        avg_coating,
+        total_dip_qty,
+        total_ms_production_kg,
+        total_gi_production_kg,
+        zinc_consumption_kg,
+        zinc_consumption_percentage
+      FROM production_entries
+      WHERE shift_date = ?
+      AND shift_name = ?
+      ${materialCondition}
+      ORDER BY sr_no ASC
       `,
-      params,
+      [date, shift_name, ...materialParams],
     );
 
     const [summaryRows] = await db.query(
       `
       SELECT
-        ROUND(COALESCE(SUM(ms_material_weight), 0), 3)
-          AS total_ms_production_kg,
-        ROUND(COALESCE(SUM(gi_material_weight), 0), 3)
-          AS total_gi_production_kg
-      FROM (
-        SELECT
-          DATE(pe.shift_date) AS shift_date,
-          pe.shift_name,
-          pe.material,
-          AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-            AS ms_material_weight,
-          AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-            AS gi_material_weight
-        FROM production_entries pe
-        ${where}
-        GROUP BY DATE(pe.shift_date), pe.shift_name, pe.material
-      ) AS material_total
+        COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN ms_weight IS NOT NULL AND dipping_qty IS NOT NULL
+              THEN ms_weight * dipping_qty
+              ELSE 0
+            END
+          ),
+          0
+        ) AS total_ms_production_kg,
+
+        COALESCE(
+          SUM(
+            CASE
+              WHEN gi_weight IS NOT NULL AND dipping_qty IS NOT NULL
+              THEN gi_weight * dipping_qty
+              ELSE 0
+            END
+          ),
+          0
+        ) AS total_gi_production_kg,
+
+        COALESCE(AVG(NULLIF(avg_coating, 0)), 0) AS avg_coating
+      FROM production_entries
+      WHERE shift_date = ?
+      AND shift_name = ?
+      AND row_type = 'entry'
+      ${materialCondition}
       `,
-      params,
+      [date, shift_name, ...materialParams],
     );
 
-    const totalMs = Number(summaryRows[0]?.total_ms_production_kg) || 0;
-    const totalGi = Number(summaryRows[0]?.total_gi_production_kg) || 0;
+    const summaryData = summaryRows[0];
 
-    const zincConsumptionKg = Number((totalGi - totalMs).toFixed(3));
+    const totalMs = toNumber(summaryData.total_ms_production_kg);
+    const totalGi = toNumber(summaryData.total_gi_production_kg);
+    const zincKg = totalGi - totalMs;
 
-    const zincConsumptionPercentage =
-      totalMs > 0
-        ? Number((((totalGi - totalMs) / totalMs) * 100).toFixed(2))
-        : 0;
+    const summary = {
+      date,
+      shift_name,
+      total_dip_qty: toNumber(summaryData.total_dip_qty),
+      total_ms_production_kg: totalMs.toFixed(3),
+      total_gi_production_kg: totalGi.toFixed(3),
+      zinc_consumption_kg: zincKg.toFixed(3),
+      zinc_consumption_percentage: formatPercent(totalGi, totalMs),
+      avg_coating: Math.round(toNumber(summaryData.avg_coating)),
+    };
 
     const [materialSummary] = await db.query(
       `
       SELECT
-        DATE_FORMAT(pe.shift_date, '%Y-%m-%d') AS shift_date,
-        pe.shift_name,
-        pe.material,
-
-        ROUND(AVG(NULLIF(pe.ms_weight, 0)), 3) AS avg_ms_weight,
-        ROUND(AVG(NULLIF(pe.gi_weight, 0)), 3) AS avg_gi_weight,
-
-        COALESCE(SUM(pe.dipping_qty), 0) AS total_dip_qty,
+        material,
+        COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
+        ROUND(AVG(NULLIF(ms_weight, 0)), 3) AS avg_ms_weight,
+        ROUND(AVG(NULLIF(gi_weight, 0)), 3) AS avg_gi_weight,
 
         ROUND(
-          AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0),
+          COALESCE(SUM(ms_weight * dipping_qty), 0),
           3
         ) AS total_ms_production_kg,
 
         ROUND(
-          AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0),
+          COALESCE(SUM(gi_weight * dipping_qty), 0),
           3
         ) AS total_gi_production_kg,
 
         ROUND(
-          (
-            AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-          ) -
-          (
-            AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-          ),
+          COALESCE(SUM(gi_weight * dipping_qty), 0) -
+          COALESCE(SUM(ms_weight * dipping_qty), 0),
           3
         ) AS zinc_consumption_kg,
 
         ROUND(
-          (
-            (
-              AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-            ) -
-            (
-              AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-            )
-          )
-          /
-          (
-            AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-          )
-          * 100,
+          CASE
+            WHEN COALESCE(SUM(ms_weight * dipping_qty), 0) > 0
+            THEN (
+              (
+                COALESCE(SUM(gi_weight * dipping_qty), 0) -
+                COALESCE(SUM(ms_weight * dipping_qty), 0)
+              ) / COALESCE(SUM(ms_weight * dipping_qty), 0)
+            ) * 100
+            ELSE 0
+          END,
           2
-        ) AS zinc_consumption_percentage
+        ) AS zinc_consumption_percentage,
 
-      FROM production_entries pe
-      ${where}
-      GROUP BY DATE(pe.shift_date), pe.shift_name, pe.material
-      ORDER BY DATE(pe.shift_date) DESC, pe.shift_name ASC, pe.material ASC
+        ROUND(AVG(NULLIF(avg_coating, 0)), 0) AS avg_coating
+      FROM production_entries
+      WHERE shift_date = ?
+      AND shift_name = ?
+      AND row_type = 'entry'
+      ${materialCondition}
+      GROUP BY material
+      ORDER BY material ASC
       `,
-      params,
+      [date, shift_name, ...materialParams],
     );
 
     return res.json({
       success: true,
       message: "Production history fetched successfully",
       data: {
-        filters: {
-          from_date: from_date || null,
-          to_date: to_date || null,
-          month: month || null,
-          year: year || null,
-          shift_name: shift_name || null,
-          supervisor_id: supervisor_id || null,
-          material: material || null,
+        filter: {
+          date,
+          shift_name,
+          material: material || "",
         },
-        summary: {
-          total_ms_production_kg: totalMs,
-          total_gi_production_kg: totalGi,
-          zinc_consumption_kg: zincConsumptionKg,
-          zinc_consumption_percentage: zincConsumptionPercentage,
-        },
+        summary,
         material_summary: materialSummary,
-        table_data: rows,
+        table_data: tableData,
       },
     });
   } catch (error) {

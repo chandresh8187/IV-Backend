@@ -64,6 +64,7 @@ app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/shifts", require("./routes/shiftRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));
+app.use("/api/users", require("./routes/userRoutes"));
 
 const PORT = process.env.PORT || 3000;
 
