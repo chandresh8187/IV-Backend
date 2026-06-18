@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { checkPlanningCompletion } = require("../utils/checkPlanningCompletion");
 
 const calculateZincPercentage = (msWeight, giWeight) => {
   const ms = Number(msWeight);
@@ -185,6 +186,11 @@ const saveProductionEntry = async (req, res) => {
           sr_no: Number(sr_no),
         });
 
+        await checkPlanningCompletion({
+          challanNo: challan_no,
+          io,
+        });
+
         return res.json({
           success: true,
           action: "updated",
@@ -194,38 +200,6 @@ const saveProductionEntry = async (req, res) => {
             production_weight: productionWeight,
             avg_coating: avgCoating,
           },
-        });
-      }
-
-      const [lastRows] = await db.query(
-        `
-    SELECT sr_no, material, row_type
-    FROM production_entries
-    WHERE shift_id = ?
-    ORDER BY sr_no DESC
-    LIMIT 1
-    `,
-        [activeShift.id],
-      );
-
-      const lastRow = lastRows[0];
-
-      let createdSummaryRow = null;
-
-      if (
-        lastRow &&
-        lastRow.row_type === "entry" &&
-        lastRow.material &&
-        material &&
-        lastRow.material.toLowerCase() !== material.toLowerCase()
-      ) {
-        createdSummaryRow = await createMaterialSummaryRow({
-          connection: db,
-          shiftId: activeShift.id,
-          shiftDate: activeShift.shift_date,
-          shiftName: activeShift.shift_name,
-          material: lastRow.material,
-          createdBy: req.user.id,
         });
       }
 
@@ -298,11 +272,15 @@ const saveProductionEntry = async (req, res) => {
         action: "full_created",
         type: "created",
         production_id: result.insertId,
-        summary_row: createdSummaryRow,
         shift_id: activeShift.id,
         shift_date: activeShift.shift_date,
         shift_name: activeShift.shift_name,
         sr_no: Number(nextSrNo),
+      });
+
+      await checkPlanningCompletion({
+        challanNo: challan_no,
+        io,
       });
 
       return res.status(201).json({
@@ -312,7 +290,6 @@ const saveProductionEntry = async (req, res) => {
         data: {
           production_id: result.insertId,
           sr_no: nextSrNo,
-          summary_row: createdSummaryRow,
           zinc_percentage: zincPercentage,
           production_weight: productionWeight,
           avg_coating: avgCoating,

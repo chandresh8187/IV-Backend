@@ -138,7 +138,7 @@ const getDashboardData = async (req, res) => {
       const [rows] = await db.query(
         `
         SELECT
-          ROUND(AVG(((gi_weight - ms_weight) / ms_weight) * 100), 1)
+          ROUND(AVG(((gi_weight - ms_weight) / ms_weight) * 100), 2)
             AS zinc_consumption
         FROM production_entries
         ${whereQuery}
@@ -196,9 +196,7 @@ const getDashboardData = async (req, res) => {
         activeShift.id,
       ]);
 
-      activeShiftZincConsumption = await getZincConsumption(activeWhere, [
-        activeShift.id,
-      ]);
+      activeShiftZincConsumption = activeShiftTotalSummary.zinc_consumption;
     }
 
     return res.json({
