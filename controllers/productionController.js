@@ -558,6 +558,7 @@ const getProductions = async (req, res) => {
       shift_date,
       shift_name,
       shift_id,
+      challan_no,
       page = 1,
       limit = 50,
     } = req.query;
@@ -592,7 +593,12 @@ const getProductions = async (req, res) => {
       params.push(shift_id);
     }
 
-    query += ` ORDER BY production_entries.sr_no ASC LIMIT ? OFFSET ?`;
+    if (challan_no) {
+      query += ` AND production_entries.challan_no = ?`;
+      params.push(challan_no);
+    }
+
+    query += ` ORDER BY production_entries.shift_date ASC, production_entries.sr_no ASC LIMIT ? OFFSET ?`;
     params.push(Number(limit), offset);
 
     const [rows] = await db.query(query, params);

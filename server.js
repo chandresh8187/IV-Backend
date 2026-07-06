@@ -69,6 +69,7 @@ app.use(
   "/api/production-planning",
   require("./routes/productionPlanningRoutes"),
 );
+app.use("/api/certificates", require("./routes/productionCertificateRoutes"));
 
 const PORT = process.env.PORT || 3000;
 

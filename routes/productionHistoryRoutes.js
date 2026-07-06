@@ -2,33 +2,23 @@ const express = require("express");
 const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
-const roleMiddleware = require("../middleware/roleMiddleware");
 
 const {
-  getProductionHistory,
+  getHistoryDates,
+  getHistoryDateSummary,
+  getHistoryShiftTable,
+  getHistoryMaterialSummary,
+  getHistoryPlanningSummary,
 } = require("../controllers/productionHistoryController");
 
-/*
-GET /api/production-history
+router.get("/dates", authMiddleware, getHistoryDates);
 
-Examples:
+router.get("/date-summary", authMiddleware, getHistoryDateSummary);
 
-/api/production-history
+router.get("/shift-table", authMiddleware, getHistoryShiftTable);
 
-/api/production-history?from_date=2026-05-23&to_date=2026-05-23
+router.get("/material-summary", authMiddleware, getHistoryMaterialSummary);
 
-/api/production-history?shift_name=day
-
-/api/production-history?material=w beam
-
-/api/production-history?month=5&year=2026
-*/
-
-router.get(
-  "/",
-  authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
-  getProductionHistory,
-);
+router.get("/planning-summary", authMiddleware, getHistoryPlanningSummary);
 
 module.exports = router;

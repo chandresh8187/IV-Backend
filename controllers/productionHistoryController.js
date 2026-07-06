@@ -2,18 +2,95 @@ const db = require("../config/db");
 
 const toNumber = (value) => Number(value || 0);
 
-const formatPercent = (giTotal, msTotal) => {
-  const ms = toNumber(msTotal);
-  const gi = toNumber(giTotal);
+const calculateZinc = (totalMs, totalGi) => {
+  const ms = toNumber(totalMs);
+  const gi = toNumber(totalGi);
 
-  if (!ms || ms <= 0) return "0.00";
+  if (ms <= 0) return 0;
 
-  return (((gi - ms) / ms) * 100).toFixed(2);
+  return Number((((gi - ms) / ms) * 100).toFixed(2));
 };
 
-const getProductionHistory = async (req, res) => {
+const getTotalSummary = async (whereQuery, params) => {
+  const [rows] = await db.query(
+    `
+    SELECT
+      ROUND(COALESCE(SUM(ms_material_weight), 0), 3)
+        AS total_ms_production_kg,
+
+      ROUND(COALESCE(SUM(gi_material_weight), 0), 3)
+        AS total_gi_production_kg
+    FROM (
+      SELECT
+        material,
+        AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+          AS ms_material_weight,
+        AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+          AS gi_material_weight
+      FROM production_entries
+      ${whereQuery}
+      GROUP BY material
+    ) AS material_total
+    `,
+    params,
+  );
+
+  const totalMs = toNumber(rows[0]?.total_ms_production_kg);
+  const totalGi = toNumber(rows[0]?.total_gi_production_kg);
+  const zinkUsed = Number((totalGi - totalMs).toFixed(3));
+
+  return {
+    total_ms_production_kg: totalMs,
+    total_gi_production_kg: totalGi,
+    zink_used: zinkUsed,
+    zinc_consumption: calculateZinc(totalMs, totalGi),
+  };
+};
+
+const getHistoryDates = async (req, res) => {
   try {
-    const { date, shift_name, material } = req.query;
+    const [dates] = await db.query(
+      `
+      SELECT
+        DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
+      FROM production_entries
+      GROUP BY shift_date
+      ORDER BY shift_date DESC
+      `,
+    );
+
+    const finalData = [];
+
+    for (const item of dates) {
+      const whereQuery = `
+        WHERE shift_date = ?
+      `;
+
+      const summary = await getTotalSummary(whereQuery, [item.shift_date]);
+
+      finalData.push({
+        shift_date: item.shift_date,
+        ...summary,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "History dates fetched successfully",
+      data: finalData,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+const getHistoryDateSummary = async (req, res) => {
+  try {
+    const { date } = req.query;
 
     if (!date) {
       return res.status(400).json({
@@ -22,10 +99,64 @@ const getProductionHistory = async (req, res) => {
       });
     }
 
-    if (!shift_name) {
+    const daySummary = await getTotalSummary(
+      `
+      WHERE shift_date = ?
+      AND shift_name = 'day'
+      `,
+      [date],
+    );
+
+    const nightSummary = await getTotalSummary(
+      `
+      WHERE shift_date = ?
+      AND shift_name = 'night'
+      `,
+      [date],
+    );
+
+    const totalMs =
+      toNumber(daySummary.total_ms_production_kg) +
+      toNumber(nightSummary.total_ms_production_kg);
+
+    const totalGi =
+      toNumber(daySummary.total_gi_production_kg) +
+      toNumber(nightSummary.total_gi_production_kg);
+
+    const total = {
+      total_ms_production_kg: Number(totalMs.toFixed(3)),
+      total_gi_production_kg: Number(totalGi.toFixed(3)),
+      zink_used: Number((totalGi - totalMs).toFixed(3)),
+      zinc_consumption: calculateZinc(totalMs, totalGi),
+    };
+
+    return res.json({
+      success: true,
+      message: "Date summary fetched successfully",
+      data: {
+        date,
+        day_shift: daySummary,
+        night_shift: nightSummary,
+        total,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+const getHistoryShiftTable = async (req, res) => {
+  try {
+    const { date, shift_name } = req.query;
+
+    if (!date || !shift_name) {
       return res.status(400).json({
         success: false,
-        message: "shift_name is required",
+        message: "date and shift_name are required",
       });
     }
 
@@ -36,13 +167,13 @@ const getProductionHistory = async (req, res) => {
       });
     }
 
-    let materialCondition = "";
-    const materialParams = [];
-
-    if (material) {
-      materialCondition = " AND material LIKE ?";
-      materialParams.push(`%${material}%`);
-    }
+    const summary = await getTotalSummary(
+      `
+      WHERE shift_date = ?
+      AND shift_name = ?
+      `,
+      [date, shift_name],
+    );
 
     const [tableData] = await db.query(
       `
@@ -52,11 +183,10 @@ const getProductionHistory = async (req, res) => {
         DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date,
         shift_name,
         sr_no,
+        production_time,
         challan_no,
         party_name,
         material,
-        row_type,
-        production_time,
         dipping_qty,
         kettle_temperature,
         ms_weight,
@@ -68,136 +198,22 @@ const getProductionHistory = async (req, res) => {
         c3,
         c4,
         c5,
-        avg_coating,
-        total_dip_qty,
-        total_ms_production_kg,
-        total_gi_production_kg,
-        zinc_consumption_kg,
-        zinc_consumption_percentage
+        avg_coating
       FROM production_entries
       WHERE shift_date = ?
       AND shift_name = ?
-      ${materialCondition}
       ORDER BY sr_no ASC
       `,
-      [date, shift_name, ...materialParams],
-    );
-
-    const [summaryRows] = await db.query(
-      `
-      SELECT
-        COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
-
-        COALESCE(
-          SUM(
-            CASE
-              WHEN ms_weight IS NOT NULL AND dipping_qty IS NOT NULL
-              THEN ms_weight * dipping_qty
-              ELSE 0
-            END
-          ),
-          0
-        ) AS total_ms_production_kg,
-
-        COALESCE(
-          SUM(
-            CASE
-              WHEN gi_weight IS NOT NULL AND dipping_qty IS NOT NULL
-              THEN gi_weight * dipping_qty
-              ELSE 0
-            END
-          ),
-          0
-        ) AS total_gi_production_kg,
-
-        COALESCE(AVG(NULLIF(avg_coating, 0)), 0) AS avg_coating
-      FROM production_entries
-      WHERE shift_date = ?
-      AND shift_name = ?
-      AND row_type = 'entry'
-      ${materialCondition}
-      `,
-      [date, shift_name, ...materialParams],
-    );
-
-    const summaryData = summaryRows[0];
-
-    const totalMs = toNumber(summaryData.total_ms_production_kg);
-    const totalGi = toNumber(summaryData.total_gi_production_kg);
-    const zincKg = totalGi - totalMs;
-
-    const summary = {
-      date,
-      shift_name,
-      total_dip_qty: toNumber(summaryData.total_dip_qty),
-      total_ms_production_kg: totalMs.toFixed(3),
-      total_gi_production_kg: totalGi.toFixed(3),
-      zinc_consumption_kg: zincKg.toFixed(3),
-      zinc_consumption_percentage: formatPercent(totalGi, totalMs),
-      avg_coating: Math.round(toNumber(summaryData.avg_coating)),
-    };
-
-    const [materialSummary] = await db.query(
-      `
-      SELECT
-        material,
-        COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
-        ROUND(AVG(NULLIF(ms_weight, 0)), 3) AS avg_ms_weight,
-        ROUND(AVG(NULLIF(gi_weight, 0)), 3) AS avg_gi_weight,
-
-        ROUND(
-          COALESCE(SUM(ms_weight * dipping_qty), 0),
-          3
-        ) AS total_ms_production_kg,
-
-        ROUND(
-          COALESCE(SUM(gi_weight * dipping_qty), 0),
-          3
-        ) AS total_gi_production_kg,
-
-        ROUND(
-          COALESCE(SUM(gi_weight * dipping_qty), 0) -
-          COALESCE(SUM(ms_weight * dipping_qty), 0),
-          3
-        ) AS zinc_consumption_kg,
-
-        ROUND(
-          CASE
-            WHEN COALESCE(SUM(ms_weight * dipping_qty), 0) > 0
-            THEN (
-              (
-                COALESCE(SUM(gi_weight * dipping_qty), 0) -
-                COALESCE(SUM(ms_weight * dipping_qty), 0)
-              ) / COALESCE(SUM(ms_weight * dipping_qty), 0)
-            ) * 100
-            ELSE 0
-          END,
-          2
-        ) AS zinc_consumption_percentage,
-
-        ROUND(AVG(NULLIF(avg_coating, 0)), 0) AS avg_coating
-      FROM production_entries
-      WHERE shift_date = ?
-      AND shift_name = ?
-      AND row_type = 'entry'
-      ${materialCondition}
-      GROUP BY material
-      ORDER BY material ASC
-      `,
-      [date, shift_name, ...materialParams],
+      [date, shift_name],
     );
 
     return res.json({
       success: true,
-      message: "Production history fetched successfully",
+      message: "Shift table fetched successfully",
       data: {
-        filter: {
-          date,
-          shift_name,
-          material: material || "",
-        },
+        date,
+        shift_name,
         summary,
-        material_summary: materialSummary,
         table_data: tableData,
       },
     });
@@ -210,6 +226,152 @@ const getProductionHistory = async (req, res) => {
   }
 };
 
+const getHistoryMaterialSummary = async (req, res) => {
+  try {
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: "date is required",
+      });
+    }
+
+    const [rows] = await db.query(
+      `
+      SELECT
+        material,
+
+        ROUND(AVG(NULLIF(ms_weight, 0)), 3) AS avg_ms_weight,
+        ROUND(AVG(NULLIF(gi_weight, 0)), 3) AS avg_gi_weight,
+
+        COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
+
+        ROUND(
+          AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
+          3
+        ) AS total_ms_production_kg,
+
+        ROUND(
+          AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
+          3
+        ) AS total_gi_production_kg,
+
+        ROUND(
+          (
+            AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+          ) -
+          (
+            AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+          ),
+          3
+        ) AS zink_used,
+
+        ROUND(
+          (
+            (
+              AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+            ) -
+            (
+              AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
+            )
+          )
+          /
+          NULLIF(
+            AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
+            0
+          )
+          * 100,
+          2
+        ) AS zinc_consumption,
+
+        ROUND(AVG(NULLIF(avg_coating, 0)), 0) AS avg_coating
+
+      FROM production_entries
+      WHERE shift_date = ?
+      GROUP BY material
+      ORDER BY material ASC
+      `,
+      [date],
+    );
+
+    return res.json({
+      success: true,
+      message: "Material summary fetched successfully",
+      data: rows,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
+const getHistoryPlanningSummary = async (req, res) => {
+  try {
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: "date is required",
+      });
+    }
+
+    const [rows] = await db.query(
+      `
+      SELECT
+        pp.id,
+        pp.challan_no,
+        pp.party_name,
+        pp.material_description,
+        pp.planned_qty,
+        pp.completed_qty,
+        pp.third_party_name,
+        pp.status,
+        (pp.planned_qty - pp.completed_qty) AS remaining_qty,
+
+        ROUND(
+          CASE
+            WHEN pp.planned_qty > 0
+            THEN (pp.completed_qty / pp.planned_qty) * 100
+            ELSE 0
+          END,
+          2
+        ) AS completion_percentage
+
+      FROM production_planning pp
+      WHERE pp.challan_no IN (
+        SELECT DISTINCT challan_no
+        FROM production_entries
+        WHERE shift_date = ?
+        AND challan_no IS NOT NULL
+      )
+      ORDER BY pp.id DESC
+      `,
+      [date],
+    );
+
+    return res.json({
+      success: true,
+      message: "Planning summary fetched successfully",
+      data: rows,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
-  getProductionHistory,
+  getHistoryDates,
+  getHistoryDateSummary,
+  getHistoryShiftTable,
+  getHistoryMaterialSummary,
+  getHistoryPlanningSummary,
 };

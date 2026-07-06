@@ -57,7 +57,7 @@ const checkPlanningCompletion = async ({ challanNo, io }) => {
     });
 
     await sendNotificationToRoles({
-      roles: ["production_manager", "superadmin"],
+      roles: ["admin", "superadmin"],
       title: "Planning Completed",
       body: `Challan ${planning.challan_no} production completed ${completedQty}/${planning.planned_qty} NOS`,
       data: {
