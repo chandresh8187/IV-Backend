@@ -1,6 +1,8 @@
 const db = require("../config/db");
 const { checkPlanningCompletion } = require("../utils/checkPlanningCompletion");
-
+const {
+  checkEntryZincNotification,
+} = require("../utils/checkEntryZincNotification");
 const calculateZincPercentage = (msWeight, giWeight) => {
   const ms = Number(msWeight);
   const gi = Number(giWeight);
@@ -177,6 +179,8 @@ const saveProductionEntry = async (req, res) => {
           ],
         );
 
+        const savedEntryId = existingRow.id;
+
         io.emit("production_updated", {
           action: "full_updated",
           type: "updated",
@@ -184,6 +188,11 @@ const saveProductionEntry = async (req, res) => {
           shift_date: activeShift.shift_date,
           shift_name: activeShift.shift_name,
           sr_no: Number(sr_no),
+        });
+
+        await checkEntryZincNotification({
+          entryId: savedEntryId,
+          io,
         });
 
         await checkPlanningCompletion({
@@ -276,6 +285,12 @@ const saveProductionEntry = async (req, res) => {
         shift_date: activeShift.shift_date,
         shift_name: activeShift.shift_name,
         sr_no: Number(nextSrNo),
+      });
+      const savedEntryId = result.insertId;
+
+      await checkEntryZincNotification({
+        entryId: savedEntryId,
+        io,
       });
 
       await checkPlanningCompletion({

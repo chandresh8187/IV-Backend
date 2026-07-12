@@ -33,24 +33,52 @@ const sendToTokens = async ({ tokens, title, body, data = {} }) => {
 };
 
 const sendNotificationToRoles = async ({ roles, title, body, data = {} }) => {
-  const [rows] = await db.query(
+  const [tokens] = await db.query(
     `
-    SELECT uft.fcm_token
-    FROM user_fcm_tokens uft
-    INNER JOIN users u ON u.id = uft.user_id
+    SELECT 
+      u.id AS user_id,
+      u.name,
+      u.role,
+      t.fcm_token
+    FROM users u
+    INNER JOIN user_fcm_tokens t ON t.user_id = u.id
     WHERE u.role IN (?)
+    AND t.fcm_token IS NOT NULL
+    AND t.fcm_token != ''
     `,
     [roles],
   );
 
-  const tokens = rows.map((row) => row.fcm_token).filter(Boolean);
+  const fcmTokens = tokens.map((item) => item.fcm_token);
 
-  return sendToTokens({
-    tokens,
-    title,
-    body,
-    data,
+  if (fcmTokens.length === 0) {
+    console.log("No FCM tokens found for roles:", roles);
+    return;
+  }
+
+  const response = await admin.messaging().sendEachForMulticast({
+    tokens: fcmTokens,
+    notification: {
+      title,
+      body,
+    },
+    data: Object.fromEntries(
+      Object.entries(data).map(([key, value]) => [key, String(value)]),
+    ),
+    android: {
+      priority: "high",
+      notification: {
+        channelId: "default",
+        sound: "default",
+      },
+    },
   });
+
+  console.log("FCM response:", response.successCount, response.failureCount);
+};
+
+module.exports = {
+  sendNotificationToRoles,
 };
 
 const sendNotificationToUser = async ({ userId, title, body, data = {} }) => {
