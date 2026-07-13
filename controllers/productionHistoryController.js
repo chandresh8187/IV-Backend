@@ -6,19 +6,23 @@ const calculateZinc = (totalMs, totalGi) => {
   const ms = toNumber(totalMs);
   const gi = toNumber(totalGi);
 
-  if (ms <= 0) return 0;
+  // ✅ FIX: Check if value is effectively 0 (smaller than precision threshold)
+  if (ms <= 0.001) return 0; // Threshold for 3-decimal precision
 
-  return Number((((gi - ms) / ms) * 100).toFixed(2));
+  const result = ((gi - ms) / ms) * 100;
+
+  // ✅ FIX: Return with 2 decimals but don't lose the value
+  return Math.round(result * 100) / 100; // Safer than toFixed
 };
 
 const getTotalSummary = async (whereQuery, params) => {
   const [rows] = await db.query(
     `
     SELECT
-      ROUND(COALESCE(SUM(ms_material_weight), 0), 3)
+      ROUND(COALESCE(SUM(ms_material_weight), 0), 4)
         AS total_ms_production_kg,
 
-      ROUND(COALESCE(SUM(gi_material_weight), 0), 3)
+      ROUND(COALESCE(SUM(gi_material_weight), 0), 4)
         AS total_gi_production_kg
     FROM (
       SELECT
@@ -249,12 +253,12 @@ const getHistoryMaterialSummary = async (req, res) => {
 
         ROUND(
           AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-          3
+          4
         ) AS total_ms_production_kg,
 
         ROUND(
           AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-          3
+          4
         ) AS total_gi_production_kg,
 
         ROUND(
@@ -264,7 +268,7 @@ const getHistoryMaterialSummary = async (req, res) => {
           (
             AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
           ),
-          3
+          4
         ) AS zink_used,
 
         ROUND(
@@ -279,7 +283,7 @@ const getHistoryMaterialSummary = async (req, res) => {
           /
           NULLIF(
             AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-            0
+            4
           )
           * 100,
           2
