@@ -9,7 +9,7 @@ const { getUsers } = require("../controllers/userController");
 router.get(
   "/",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "plant_manager", "superadmin"]),
   getUsers,
 );
 

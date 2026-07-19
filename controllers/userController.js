@@ -5,8 +5,12 @@ const getUsers = async (req, res) => {
     let where = "";
 
     if (req.user.role === "superadmin") {
-      where = "WHERE users.role IN ('admin', 'supervisor')";
-    } else if (req.user.role === "admin") {
+      where =
+        "WHERE users.role IN ('plant_manager', 'admin', 'supervisor')";
+    } else if (
+      req.user.role === "admin" ||
+      req.user.role === "plant_manager"
+    ) {
       where = "WHERE users.role = 'supervisor'";
     } else {
       return res.status(403).json({
@@ -15,7 +19,8 @@ const getUsers = async (req, res) => {
       });
     }
 
-    const [rows] = await db.query(`
+    const [rows] = await db.query(
+      `
       SELECT
         users.id,
         users.name,
@@ -36,23 +41,46 @@ const getUsers = async (req, res) => {
         END AS is_shift_active
 
       FROM users
+
       LEFT JOIN shifts
         ON shifts.started_by = users.id
         AND shifts.status = 'active'
 
       ${where}
-      ORDER BY users.role ASC, users.name ASC
-    `);
 
-    const admins = rows.filter((user) => user.role === "admin");
-    const supervisors = rows.filter((user) => user.role === "supervisor");
+      ORDER BY
+        CASE users.role
+          WHEN 'plant_manager' THEN 1
+          WHEN 'admin' THEN 2
+          WHEN 'supervisor' THEN 3
+          ELSE 4
+        END,
+        users.name ASC
+      `,
+    );
+
+    const plantManagers = rows.filter(
+      user => user.role === "plant_manager",
+    );
+
+    const admins = rows.filter(
+      user => user.role === "admin",
+    );
+
+    const supervisors = rows.filter(
+      user => user.role === "supervisor",
+    );
 
     return res.json({
       success: true,
       message: "Users fetched successfully",
       data: {
+        plant_managers: plantManagers,
         admins,
         supervisors,
+
+        // Optional combined list for clients that prefer one array.
+        users: rows,
       },
     });
   } catch (error) {
