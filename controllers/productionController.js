@@ -1,4 +1,6 @@
 const db = require("../config/db");
+const { ensureAutomaticShift } = require("../services/automaticShiftService");
+const { getPlantStatusRow } = require("./plantStatusController");
 const { checkPlanningCompletion } = require("../utils/checkPlanningCompletion");
 const {
   checkEntryZincNotification,
@@ -34,16 +36,7 @@ const calculateAvgCoating = (readings) => {
 };
 
 const getActiveShift = async () => {
-  const [rows] = await db.query(
-    `
-    SELECT *
-    FROM shifts
-    WHERE status = 'active'
-    LIMIT 1
-    `,
-  );
-
-  return rows.length > 0 ? rows[0] : null;
+  return ensureAutomaticShift();
 };
 
 const saveProductionEntry = async (req, res) => {
@@ -93,14 +86,34 @@ const saveProductionEntry = async (req, res) => {
 
     const io = req.app.get("io");
 
-    const activeShift = await getActiveShift();
+    const plantStatus = await getPlantStatusRow();
 
-    if (!activeShift) {
-      return res.status(400).json({
+    if (!plantStatus) {
+      return res.status(500).json({
         success: false,
-        message: "Please start shift before adding production",
+        message: "Plant status configuration not found",
       });
     }
+
+    if (plantStatus.status !== "running") {
+      return res.status(423).json({
+        success: false,
+        code:
+          plantStatus.status === "maintenance"
+            ? "PLANT_UNDER_MAINTENANCE"
+            : "PLANT_STOPPED",
+        message:
+          plantStatus.message ||
+          "Production entry is temporarily unavailable",
+        data: {
+          plant_status: plantStatus.status,
+          title: plantStatus.title,
+          expected_restart_at: plantStatus.expected_restart_at,
+        },
+      });
+    }
+
+    const activeShift = await getActiveShift();
 
     const [existingRows] = await db.query(
       `

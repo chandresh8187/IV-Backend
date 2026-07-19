@@ -1,36 +1,60 @@
 const db = require("../config/db");
+const { ensureAutomaticShift, getCurrentShiftInfo } = require("../services/automaticShiftService");
 
 const getDashboardData = async (req, res) => {
   try {
-    const [settingsRows] = await db.query(`
-      SELECT *
-      FROM shift_settings
-      WHERE id = 1
-    `);
+    const activeShift = await ensureAutomaticShift();
+    const shiftInfo = getCurrentShiftInfo();
+    const currentShift = shiftInfo.shift_name;
+    const todayDate = shiftInfo.shift_date;
 
-    if (settingsRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Shift settings not found",
-      });
-    }
+    const [plantRows] = await db.query(
+      `
+        SELECT
+          ps.status,
+          ps.title,
+          ps.message,
+          ps.started_at,
+          ps.expected_restart_at,
+          ps.updated_at,
+          ps.updated_by,
+          u.name AS updated_by_name,
+          u.role AS updated_by_role
+        FROM plant_status ps
+        LEFT JOIN users u ON u.id = ps.updated_by
+        WHERE ps.id = 1
+        LIMIT 1
+      `,
+    );
 
-    const currentShift = settingsRows[0].current_shift;
+    const plantStatusRow = plantRows[0] || {
+      status: "running",
+      title: null,
+      message: null,
+      started_at: null,
+      expected_restart_at: null,
+      updated_at: null,
+      updated_by: null,
+      updated_by_name: null,
+      updated_by_role: null,
+    };
 
-    const [activeShiftRows] = await db.query(`
-      SELECT
-        shifts.*,
-        users.name AS supervisor_name,
-        users.email AS supervisor_email
-      FROM shifts
-      LEFT JOIN users ON users.id = shifts.started_by
-      WHERE shifts.status = 'active'
-      LIMIT 1
-    `);
-
-    const activeShift = activeShiftRows.length > 0 ? activeShiftRows[0] : null;
-
-    const todayDate = new Date().toISOString().split("T")[0];
+    const plantStatus = {
+      status: plantStatusRow.status || "running",
+      title: plantStatusRow.title,
+      message: plantStatusRow.message,
+      started_at: plantStatusRow.started_at,
+      expected_restart_at: plantStatusRow.expected_restart_at,
+      updated_at: plantStatusRow.updated_at,
+      production_allowed: plantStatusRow.status === "running",
+      updated_by: plantStatusRow.updated_by
+        ? {
+            id: plantStatusRow.updated_by,
+            name: plantStatusRow.updated_by_name,
+            role: plantStatusRow.updated_by_role,
+          }
+        : null,
+    };
 
     const getMaterialSummary = async (whereQuery, params) => {
       const [rows] = await db.query(
@@ -169,12 +193,16 @@ const getDashboardData = async (req, res) => {
     const dayTotalSummary = await getTotalSummary(dayWhere, [todayDate]);
     const nightTotalSummary = await getTotalSummary(nightWhere, [todayDate]);
 
+    // Use Luxon's India-time operational month instead of the database server timezone.
     const monthWhere = `
-      WHERE MONTH(shift_date) = MONTH(CURDATE())
-      AND YEAR(shift_date) = YEAR(CURDATE())
+      WHERE MONTH(shift_date) = ?
+      AND YEAR(shift_date) = ?
     `;
 
-    const monthTotalSummary = await getTotalSummary(monthWhere, []);
+    const monthTotalSummary = await getTotalSummary(monthWhere, [
+      shiftInfo.month,
+      shiftInfo.year,
+    ]);
 
     let activeShiftMaterialSummary = [];
     let activeShiftTotalSummary = {
@@ -205,13 +233,16 @@ const getDashboardData = async (req, res) => {
       data: {
         today_date: todayDate,
 
+        plant_status: plantStatus,
+
         shift_status: {
           current_shift: currentShift,
           is_shift_active: !!activeShift,
           active_shift: activeShift,
-          button_text: activeShift
-            ? `End ${activeShift.shift_name} shift`
-            : `Start ${currentShift} shift`,
+          automatic: true,
+          timezone: shiftInfo.timezone,
+          shift_start: shiftInfo.shift_start,
+          shift_end: shiftInfo.shift_end,
         },
 
         today_summary: {

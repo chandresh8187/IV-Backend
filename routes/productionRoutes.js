@@ -15,7 +15,7 @@ const {
 router.post(
   "/save",
   authMiddleware,
-  roleMiddleware(["supervisor", "superadmin"]),
+  roleMiddleware(["supervisor", "plant_manager", "superadmin"]),
   saveProductionEntry,
 );
 

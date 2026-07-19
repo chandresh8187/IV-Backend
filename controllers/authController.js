@@ -101,10 +101,10 @@ const registerUser = async (req, res) => {
       });
     }
 
-    if (!["supervisor", "admin"].includes(role)) {
+    if (!["supervisor", "admin", "plant_manager"].includes(role)) {
       return res.status(400).json({
         success: false,
-        message: "Superadmin can only register admin or supervisor",
+        message: "Superadmin can only register plant manager, admin or supervisor",
       });
     }
 

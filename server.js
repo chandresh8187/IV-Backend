@@ -62,6 +62,7 @@ app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/productions", require("./routes/productionRoutes"));
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/shifts", require("./routes/shiftRoutes"));
+app.use("/api/plant", require("./routes/plantStatusRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
