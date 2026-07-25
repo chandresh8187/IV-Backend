@@ -9,7 +9,7 @@ const { getDashboardData } = require("../controllers/dashboardController");
 router.get(
   "/",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"]),
   getDashboardData,
 );
 
