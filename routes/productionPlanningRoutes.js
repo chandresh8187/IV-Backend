@@ -34,21 +34,21 @@ const {
 router.post(
   "/",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"]),
   createProductionPlanning,
 );
 
 router.put(
   "/:id",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"]),
   updateProductionPlanning,
 );
 
 router.delete(
   "/:id",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"]),
   deleteProductionPlanning,
 );
 
@@ -59,7 +59,7 @@ router.get("/available", authMiddleware, getAvailablePlanningDropdown);
 router.post(
   "/extract-pdf",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"]),
   upload.single("pdf"),
   extractPlanningPdf,
 );
