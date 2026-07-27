@@ -162,7 +162,6 @@ const saveProductionEntry = async (req, res) => {
           [Number(planning_id)],
         );
 
-        console.log("planningRows", planningRows);
         if (planningRows.length === 0) {
           await connection.rollback();
           return res.status(404).json({
@@ -475,7 +474,6 @@ const saveProductionEntry = async (req, res) => {
           },
         });
       } catch (transactionError) {
-        console.log("transactionError", transactionError);
         await connection.rollback();
         throw transactionError;
       } finally {
