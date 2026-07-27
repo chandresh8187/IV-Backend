@@ -21,10 +21,11 @@ const checkPlanningCompletion = async ({ challanNo, io }) => {
 
   const [qtyRows] = await db.query(
     `
-    SELECT COALESCE(SUM(dipping_qty), 0) AS completed_qty
-    FROM production_entries
-    WHERE challan_no = ?
-    `,
+  SELECT COALESCE(SUM(dipping_qty), 0) AS completed_qty
+  FROM production_entries
+  WHERE challan_no = ?
+    AND COALESCE(row_type, 'entry') <> 'summary'
+  `,
     [challanNo],
   );
 

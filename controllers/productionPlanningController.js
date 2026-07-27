@@ -1,5 +1,10 @@
 const db = require("../config/db");
 
+const parsePlannedQuantity = (value) => {
+  const quantity = Number(value);
+  return Number.isInteger(quantity) && quantity > 0 ? quantity : null;
+};
+
 const createProductionPlanning = async (req, res) => {
   try {
     const {
@@ -10,7 +15,14 @@ const createProductionPlanning = async (req, res) => {
       third_party_name,
     } = req.body;
 
-    if (!challan_no || !party_name || !material_description || !planned_qty) {
+    const plannedQuantity = parsePlannedQuantity(planned_qty);
+
+    if (
+      !challan_no ||
+      !party_name ||
+      !material_description ||
+      !plannedQuantity
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -55,10 +67,10 @@ const createProductionPlanning = async (req, res) => {
       },
     });
   } catch (error) {
+    console.log("error", error);
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -76,13 +88,44 @@ const updateProductionPlanning = async (req, res) => {
       status,
     } = req.body;
 
-    if (!challan_no || !party_name || !material_description || !planned_qty) {
+    const plannedQuantity = parsePlannedQuantity(planned_qty);
+
+    if (
+      !challan_no ||
+      !party_name ||
+      !material_description ||
+      !plannedQuantity
+    ) {
       return res.status(400).json({
         success: false,
         message:
           "challan_no, party_name, material_description and planned_qty are required",
       });
     }
+
+    const [existingRows] = await db.query(
+      `SELECT completed_qty FROM production_planning WHERE id = ? LIMIT 1`,
+      [id],
+    );
+    if (existingRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Production planning not found",
+      });
+    }
+    if (plannedQuantity < Number(existingRows[0].completed_qty)) {
+      return res.status(409).json({
+        success: false,
+        message: `Planned quantity cannot be below the completed quantity (${Number(existingRows[0].completed_qty)} NOS)`,
+      });
+    }
+
+    const finalStatus =
+      status === "canceled"
+        ? "canceled"
+        : plannedQuantity <= Number(existingRows[0].completed_qty)
+          ? "completed"
+          : "pending";
 
     await db.query(
       `
@@ -101,9 +144,9 @@ const updateProductionPlanning = async (req, res) => {
         challan_no,
         party_name,
         material_description,
-        planned_qty,
+        plannedQuantity,
         third_party_name || null,
-        status || "pending",
+        finalStatus,
         req.user.id,
         id,
       ],
@@ -123,7 +166,6 @@ const updateProductionPlanning = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -156,7 +198,6 @@ const deleteProductionPlanning = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -195,7 +236,6 @@ const getProductionPlanning = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -229,7 +269,6 @@ const getAvailablePlanningDropdown = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
