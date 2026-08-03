@@ -9,6 +9,11 @@ const generateToken = (user) => {
       role: user.role,
     },
     process.env.JWT_SECRET,
+    {
+      expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+      issuer: "iv-api",
+      audience: "iv-app",
+    },
   );
 };
 
@@ -17,7 +22,8 @@ const generateToken = (user) => {
 // ===============================
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const password = String(req.body.password || "");
 
     if (!email || !password) {
       return res.status(400).json({
@@ -28,7 +34,7 @@ const loginUser = async (req, res) => {
 
     const [users] = await db.query(
       `
-      SELECT *
+      SELECT id, name, email, password, role, assigned_shift, status
       FROM users
       WHERE email = ?
       LIMIT 1
@@ -52,10 +58,6 @@ const loginUser = async (req, res) => {
       });
     }
 
-    console.log("LOGIN EMAIL:", email);
-    console.log("USER FOUND:", users.length);
-    console.log("DB PASSWORD:", user?.password);
-
     const isPasswordMatch = await bcrypt.compare(password, user.password);
 
     if (!isPasswordMatch) {
@@ -76,13 +78,13 @@ const loginUser = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        assigned_shift: user.assigned_shift,
       },
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -92,7 +94,13 @@ const loginUser = async (req, res) => {
 // ===============================
 const registerUser = async (req, res) => {
   try {
-    const { name, email, password, role, assigned_shift } = req.body;
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const password = String(req.body.password || "");
+    const role = String(req.body.role || "").trim().toLowerCase();
+    const assigned_shift = String(req.body.assigned_shift || "")
+      .trim()
+      .toLowerCase();
 
     if (!name || !email || !password || !role) {
       return res.status(400).json({
@@ -101,11 +109,57 @@ const registerUser = async (req, res) => {
       });
     }
 
-    if (!["supervisor", "admin", "plant_manager"].includes(role)) {
+    if (!["superadmin", "supervisor", "admin", "plant_manager"].includes(role)) {
       return res.status(400).json({
         success: false,
-        message: "Superadmin can only register plant manager, admin or supervisor",
+        message: "Unsupported account role",
       });
+    }
+
+    if (name.length < 2 || name.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Name must contain between 2 and 100 characters",
+      });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 190) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid email address",
+      });
+    }
+
+    if (
+      password.length < 8 ||
+      password.length > 72 ||
+      !/[A-Z]/.test(password) ||
+      !/[a-z]/.test(password) ||
+      !/\d/.test(password)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Password must be 8-72 characters and include uppercase, lowercase and a number",
+      });
+    }
+
+    if (role === "superadmin") {
+      const currentPassword = String(req.body.current_password || "");
+      const [actors] = await db.query(
+        "SELECT password FROM users WHERE id = ? AND status = 'active' LIMIT 1",
+        [req.user.id],
+      );
+      const verified =
+        actors.length > 0 &&
+        (await bcrypt.compare(currentPassword, actors[0].password));
+
+      if (!verified) {
+        return res.status(403).json({
+          success: false,
+          message: "Your current password is required to create a Superadmin",
+        });
+      }
     }
 
     let finalAssignedShift = null;
@@ -177,7 +231,6 @@ const registerUser = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };

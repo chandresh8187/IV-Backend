@@ -2,12 +2,22 @@ const db = require("../config/db");
 
 const saveFcmToken = async (req, res) => {
   try {
-    const { fcm_token, device_type = "android" } = req.body;
+    const fcmToken = String(req.body.fcm_token || "").trim();
+    const deviceType = String(req.body.device_type || "android")
+      .trim()
+      .toLowerCase();
 
-    if (!fcm_token) {
+    if (fcmToken.length < 20 || fcmToken.length > 512) {
       return res.status(400).json({
         success: false,
-        message: "fcm_token is required",
+        message: "A valid fcm_token is required",
+      });
+    }
+
+    if (!["android", "ios", "web"].includes(deviceType)) {
+      return res.status(400).json({
+        success: false,
+        message: "device_type must be android, ios or web",
       });
     }
 
@@ -17,10 +27,11 @@ const saveFcmToken = async (req, res) => {
       (user_id, fcm_token, device_type)
       VALUES (?, ?, ?)
       ON DUPLICATE KEY UPDATE
+        user_id = VALUES(user_id),
         device_type = VALUES(device_type),
         updated_at = CURRENT_TIMESTAMP
       `,
-      [req.user.id, fcm_token, device_type],
+      [req.user.id, fcmToken, deviceType],
     );
 
     return res.json({
@@ -31,16 +42,15 @@ const saveFcmToken = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
 
 const removeFcmToken = async (req, res) => {
   try {
-    const { fcm_token } = req.body;
+    const fcmToken = String(req.body.fcm_token || "").trim();
 
-    if (!fcm_token) {
+    if (!fcmToken) {
       return res.status(400).json({
         success: false,
         message: "fcm_token is required",
@@ -53,7 +63,7 @@ const removeFcmToken = async (req, res) => {
       WHERE user_id = ?
       AND fcm_token = ?
       `,
-      [req.user.id, fcm_token],
+      [req.user.id, fcmToken],
     );
 
     return res.json({
@@ -64,7 +74,6 @@ const removeFcmToken = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };

@@ -1,0 +1,1 @@
+import{i as e}from"./index-Ddb3i0QN.js";var t=async()=>(await e.get(`/users`)).data,n=async()=>(await e.get(`/supervisors/active`)).data,r=async t=>(await e.post(`/auth/register`,t)).data,i=async({id:t,body:n})=>(await e.put(`/users/${t}`,n)).data,a=async({id:t,status:n})=>(await e.patch(`/users/${t}/status`,{status:n})).data;export{i as a,a as i,t as n,r,n as t};

@@ -5,6 +5,12 @@ const { checkPlanningCompletion } = require("../utils/checkPlanningCompletion");
 const {
   checkEntryZincNotification,
 } = require("../utils/checkEntryZincNotification");
+
+const notifyZincSafely = ({ entryId, io }) => {
+  checkEntryZincNotification({ entryId, io }).catch((error) => {
+    console.error("Zinc notification failed:", error);
+  });
+};
 const calculateZincPercentage = (msWeight, giWeight) => {
   const ms = Number(msWeight);
   const gi = Number(giWeight);
@@ -78,10 +84,12 @@ const saveProductionEntry = async (req, res) => {
       });
     }
 
-    if (!sr_no) {
+    const serialNumber = Number(sr_no);
+
+    if (!Number.isInteger(serialNumber) || serialNumber < 1) {
       return res.status(400).json({
         success: false,
-        message: "sr_no is required",
+        message: "sr_no must be a positive whole number",
       });
     }
 
@@ -115,6 +123,14 @@ const saveProductionEntry = async (req, res) => {
 
     const activeShift = await getActiveShift();
 
+    if (!activeShift) {
+      return res.status(409).json({
+        success: false,
+        code: "NO_ACTIVE_SHIFT",
+        message: "No shift is active. Start a shift before adding production.",
+      });
+    }
+
     const [existingRows] = await db.query(
       `
   SELECT *
@@ -124,7 +140,7 @@ const saveProductionEntry = async (req, res) => {
     AND COALESCE(row_type, 'entry') = 'entry'
   LIMIT 1
   `,
-      [activeShift.id, sr_no],
+      [activeShift.id, serialNumber],
     );
 
     const existingRow = existingRows.length > 0 ? existingRows[0] : null;
@@ -346,10 +362,7 @@ const saveProductionEntry = async (req, res) => {
             sr_no: Number(sr_no),
           });
 
-          await checkEntryZincNotification({
-            entryId: savedEntryId,
-            io,
-          });
+          notifyZincSafely({ entryId: savedEntryId, io });
 
           return res.json({
             success: true,
@@ -456,10 +469,7 @@ const saveProductionEntry = async (req, res) => {
         });
         const savedEntryId = result.insertId;
 
-        await checkEntryZincNotification({
-          entryId: savedEntryId,
-          io,
-        });
+        notifyZincSafely({ entryId: savedEntryId, io });
 
         return res.status(201).json({
           success: true,
@@ -670,6 +680,8 @@ const saveProductionEntry = async (req, res) => {
         sr_no: Number(sr_no),
       });
 
+      notifyZincSafely({ entryId: existingRow.id, io });
+
       return res.json({
         success: true,
         action: "updated",
@@ -748,7 +760,7 @@ const getProductions = async (req, res) => {
 
     const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
     const safeLimit = Math.min(
-      100,
+      500,
       Math.max(1, Number.parseInt(limit, 10) || 50),
     );
     const offset = (safePage - 1) * safeLimit;
@@ -767,11 +779,23 @@ const getProductions = async (req, res) => {
     const params = [];
 
     if (shift_date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(shift_date))) {
+        return res.status(400).json({
+          success: false,
+          message: "shift_date must use YYYY-MM-DD format",
+        });
+      }
       query += ` AND production_entries.shift_date = ?`;
       params.push(shift_date);
     }
 
     if (shift_name) {
+      if (!["day", "night"].includes(String(shift_name).toLowerCase())) {
+        return res.status(400).json({
+          success: false,
+          message: "shift_name must be day or night",
+        });
+      }
       query += ` AND production_entries.shift_name = ?`;
       params.push(shift_name);
     }
@@ -842,17 +866,28 @@ const getProductionById = async (req, res) => {
 };
 
 const deleteProduction = async (req, res) => {
+  let connection;
+  let transactionStarted = false;
+
   try {
-    const { id } = req.params;
-    const connection = await db.getConnection();
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid production entry id",
+      });
+    }
+
+    connection = await db.getConnection();
     await connection.beginTransaction();
+    transactionStarted = true;
     const [entryRows] = await connection.query(
       `SELECT planning_id, challan_no FROM production_entries WHERE id = ? FOR UPDATE`,
       [id],
     );
     if (entryRows.length === 0) {
       await connection.rollback();
-      connection.release();
+      transactionStarted = false;
       return res.status(404).json({
         success: false,
         message: "Production entry not found",
@@ -887,7 +922,7 @@ const deleteProduction = async (req, res) => {
       );
     }
     await connection.commit();
-    connection.release();
+    transactionStarted = false;
 
     const io = req.app.get("io");
     io.emit("production_updated", {
@@ -905,10 +940,14 @@ const deleteProduction = async (req, res) => {
       message: "Production entry deleted successfully",
     });
   } catch (error) {
+    if (transactionStarted && connection) await connection.rollback();
+    console.error("deleteProduction:", error);
     return res.status(500).json({
       success: false,
       message: "Server error",
     });
+  } finally {
+    connection?.release();
   }
 };
 

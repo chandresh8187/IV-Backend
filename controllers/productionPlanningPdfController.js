@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { promises: fsPromises } = fs;
 const { PDFParse } = require("pdf-parse");
 
 const cleanLine = (value) => {
@@ -70,7 +71,7 @@ const extractPlanningPdf = async (req, res) => {
     filePath = req.file.path;
 
     parser = new PDFParse({
-      data: fs.readFileSync(filePath),
+      data: await fsPromises.readFile(filePath),
     });
 
     const pdfData = await parser.getText();
@@ -106,7 +107,6 @@ const extractPlanningPdf = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "PDF extraction failed",
-      error: error.message,
     });
   } finally {
     try {
@@ -115,8 +115,14 @@ const extractPlanningPdf = async (req, res) => {
       }
     } catch (error) {}
 
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (filePath) {
+      try {
+        await fsPromises.unlink(filePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          console.error("Unable to remove temporary PDF:", error);
+        }
+      }
     }
   }
 };

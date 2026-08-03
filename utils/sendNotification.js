@@ -1,5 +1,6 @@
 const db = require("../config/db");
-const admin = require("../config/firebaseAdmin");
+
+const getMessaging = () => require("../config/firebaseAdmin").messaging();
 
 const sendToTokens = async ({ tokens, title, body, data = {} }) => {
   if (!tokens || tokens.length === 0) {
@@ -27,7 +28,7 @@ const sendToTokens = async ({ tokens, title, body, data = {} }) => {
     },
   };
 
-  const response = await admin.messaging().sendEachForMulticast(message);
+  const response = await getMessaging().sendEachForMulticast(message);
 
   return response;
 };
@@ -52,11 +53,10 @@ const sendNotificationToRoles = async ({ roles, title, body, data = {} }) => {
   const fcmTokens = tokens.map((item) => item.fcm_token);
 
   if (fcmTokens.length === 0) {
-    console.log("No FCM tokens found for roles:", roles);
     return;
   }
 
-  const response = await admin.messaging().sendEachForMulticast({
+  const response = await getMessaging().sendEachForMulticast({
     tokens: fcmTokens,
     notification: {
       title,
@@ -74,7 +74,7 @@ const sendNotificationToRoles = async ({ roles, title, body, data = {} }) => {
     },
   });
 
-  console.log("FCM response:", response.successCount, response.failureCount);
+  return response;
 };
 
 module.exports = {

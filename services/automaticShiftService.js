@@ -1,23 +1,26 @@
 const { DateTime } = require("luxon");
 const db = require("../config/db");
+const { getSetting } = require("./appSettingsService");
 
 const TIME_ZONE = "Asia/Kolkata";
-const DAY_SHIFT_START_HOUR = 8;
-const NIGHT_SHIFT_START_HOUR = 20;
 
-const toMySqlDateTime = (dateTime) => dateTime.toFormat("yyyy-LL-dd HH:mm:ss");
+const toMinutes = (value) => {
+  const [hours, minutes] = String(value).split(":").map(Number);
+  return hours * 60 + minutes;
+};
 
-/**
- * Calculates the operational shift from India time.
- *
- * Day shift:   08:00:00 to 19:59:59
- * Night shift: 20:00:00 to 07:59:59 on the following calendar day
- *
- * A night shift after midnight keeps the previous date as shift_date.
- */
-const getCurrentShiftInfo = (inputDateTime = null) => {
+const toMySqlDateTime = (value) => value.toFormat("yyyy-LL-dd HH:mm:ss");
+
+const getShiftSchedule = async (executor = db) =>
+  getSetting("shift_schedule", executor);
+
+const getCurrentShiftInfo = (inputDateTime = null, schedule = {}) => {
+  const dayStartText = schedule.day_start || "08:00";
+  const nightStartText = schedule.night_start || "20:00";
+  const [dayHour, dayMinute] = dayStartText.split(":").map(Number);
+  const [nightHour, nightMinute] = nightStartText.split(":").map(Number);
+
   let now;
-
   if (inputDateTime && DateTime.isDateTime(inputDateTime)) {
     now = inputDateTime.setZone(TIME_ZONE);
   } else if (inputDateTime instanceof Date) {
@@ -28,179 +31,165 @@ const getCurrentShiftInfo = (inputDateTime = null) => {
     now = DateTime.now().setZone(TIME_ZONE);
   }
 
-  if (!now.isValid) {
-    throw new Error(`Invalid date supplied to automatic shift service: ${now.invalidReason}`);
-  }
+  if (!now.isValid) throw new Error("Invalid date supplied to shift service");
 
-  const isDayShift =
-    now.hour >= DAY_SHIFT_START_HOUR && now.hour < NIGHT_SHIFT_START_HOUR;
+  const currentMinutes = now.hour * 60 + now.minute;
+  const dayStartMinutes = toMinutes(dayStartText);
+  const nightStartMinutes = toMinutes(nightStartText);
+  const isDay =
+    currentMinutes >= dayStartMinutes && currentMinutes < nightStartMinutes;
 
-  let shiftName;
-  let shiftDateTime;
+  let shiftDate = now.startOf("day");
   let shiftStart;
   let shiftEnd;
 
-  if (isDayShift) {
-    shiftName = "day";
-    shiftDateTime = now.startOf("day");
-    shiftStart = shiftDateTime.set({ hour: DAY_SHIFT_START_HOUR });
-    shiftEnd = shiftDateTime.set({ hour: NIGHT_SHIFT_START_HOUR });
+  if (isDay) {
+    shiftStart = shiftDate.set({ hour: dayHour, minute: dayMinute });
+    shiftEnd = shiftDate.set({ hour: nightHour, minute: nightMinute });
   } else {
-    shiftName = "night";
-
-    // 00:00–07:59 belongs to the previous day's night shift.
-    shiftDateTime =
-      now.hour < DAY_SHIFT_START_HOUR
-        ? now.minus({ days: 1 }).startOf("day")
-        : now.startOf("day");
-
-    shiftStart = shiftDateTime.set({ hour: NIGHT_SHIFT_START_HOUR });
-    shiftEnd = shiftDateTime.plus({ days: 1 }).set({ hour: DAY_SHIFT_START_HOUR });
+    if (currentMinutes < dayStartMinutes)
+      shiftDate = shiftDate.minus({ days: 1 });
+    shiftStart = shiftDate.set({ hour: nightHour, minute: nightMinute });
+    shiftEnd = shiftDate
+      .plus({ days: 1 })
+      .set({ hour: dayHour, minute: dayMinute });
   }
 
   return {
-    shift_name: shiftName,
-    shift_date: shiftDateTime.toISODate(),
+    shift_name: isDay ? "day" : "night",
+    shift_date: shiftDate.toISODate(),
     shift_start: toMySqlDateTime(shiftStart),
     shift_end: toMySqlDateTime(shiftEnd),
     current_time: toMySqlDateTime(now),
     timezone: TIME_ZONE,
-    year: shiftDateTime.year,
-    month: shiftDateTime.month,
+    automatic: Boolean(schedule.automatic),
+    day_start: dayStartText,
+    night_start: nightStartText,
+    year: shiftDate.year,
+    month: shiftDate.month,
   };
 };
 
-/**
- * Returns the current database shift and guarantees that exactly the correct
- * day/night shift is marked active. This is intentionally called by status,
- * dashboard, and production APIs so the system does not depend on a cron job.
- */
+const formatDbDate = (value) => {
+  if (!value) return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  return DateTime.fromJSDate(new Date(value), { zone: TIME_ZONE }).toISODate();
+};
+
+const getManualActiveShift = async (executor = db) => {
+  const [rows] = await executor.query(
+    "SELECT * FROM shifts WHERE status = 'active' ORDER BY id DESC LIMIT 1",
+  );
+  return rows[0] || null;
+};
+
+// Called by status/dashboard/production APIs, so no cron job is required.
 const ensureAutomaticShift = async () => {
   const connection = await db.getConnection();
-
+  let transactionStarted = false;
   try {
-    const shiftInfo = getCurrentShiftInfo();
+    const schedule = await getShiftSchedule(connection);
 
+    if (!schedule.automatic) {
+      const active = await getManualActiveShift(connection);
+      return active
+        ? {
+            ...active,
+            shift_date: formatDbDate(active.shift_date),
+            automatic: false,
+            timezone: TIME_ZONE,
+          }
+        : null;
+    }
+
+    const info = getCurrentShiftInfo(null, schedule);
     await connection.beginTransaction();
+    transactionStarted = true;
 
     const [activeRows] = await connection.query(
-      `
-      SELECT *
-      FROM shifts
-      WHERE status = 'active'
-      ORDER BY id DESC
-      LIMIT 1
-      FOR UPDATE
-      `,
+      "SELECT * FROM shifts WHERE status = 'active' ORDER BY id DESC LIMIT 1 FOR UPDATE",
     );
-
-    const activeShift = activeRows[0] || null;
-    const activeShiftDate = activeShift?.shift_date
-      ? DateTime.fromJSDate(new Date(activeShift.shift_date), {
-          zone: TIME_ZONE,
-        }).toISODate()
-      : null;
+    const active = activeRows[0] || null;
 
     if (
-      activeShift &&
-      activeShift.shift_name === shiftInfo.shift_name &&
-      activeShiftDate === shiftInfo.shift_date
+      active &&
+      active.shift_name === info.shift_name &&
+      formatDbDate(active.shift_date) === info.shift_date
     ) {
       await connection.query(
-        `UPDATE shift_settings SET current_shift = ? WHERE id = 1`,
-        [shiftInfo.shift_name],
+        "UPDATE shift_settings SET current_shift = ? WHERE id = 1",
+        [info.shift_name],
       );
-
       await connection.commit();
-
+      transactionStarted = false;
       return {
-        ...activeShift,
-        shift_date: shiftInfo.shift_date,
+        ...active,
+        shift_date: info.shift_date,
         automatic: true,
         timezone: TIME_ZONE,
-        scheduled_end_time: shiftInfo.shift_end,
+        scheduled_end_time: info.shift_end,
       };
     }
 
-    // Close every stale active row at the exact boundary where the new shift began.
     await connection.query(
-      `
-      UPDATE shifts
-      SET end_time = ?, status = 'closed', ended_by = NULL
-      WHERE status = 'active'
-      `,
-      [shiftInfo.shift_start],
+      `UPDATE shifts
+       SET end_time = ?, status = 'closed', ended_by = NULL
+       WHERE status = 'active'`,
+      [info.shift_start],
     );
 
-    const [existingRows] = await connection.query(
-      `
-      SELECT *
-      FROM shifts
-      WHERE shift_name = ? AND shift_date = ?
-      ORDER BY id DESC
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [shiftInfo.shift_name, shiftInfo.shift_date],
+    const [existing] = await connection.query(
+      `SELECT * FROM shifts
+       WHERE shift_name = ? AND shift_date = ?
+       ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [info.shift_name, info.shift_date],
     );
 
-    let currentShift;
-
-    if (existingRows.length > 0) {
-      currentShift = existingRows[0];
-
+    let id;
+    if (existing.length) {
+      id = existing[0].id;
       await connection.query(
-        `
-        UPDATE shifts
-        SET
-          start_time = ?,
-          end_time = NULL,
-          started_by = NULL,
-          ended_by = NULL,
-          status = 'active'
-        WHERE id = ?
-        `,
-        [shiftInfo.shift_start, currentShift.id],
+        `UPDATE shifts SET start_time = ?, end_time = NULL,
+         started_by = NULL, ended_by = NULL, status = 'active'
+         WHERE id = ?`,
+        [info.shift_start, id],
       );
     } else {
-      const [result] = await connection.query(
-        `
-        INSERT INTO shifts
-          (shift_name, shift_date, start_time, end_time, started_by, ended_by, status)
-        VALUES (?, ?, ?, NULL, NULL, NULL, 'active')
-        `,
-        [shiftInfo.shift_name, shiftInfo.shift_date, shiftInfo.shift_start],
+      const [insert] = await connection.query(
+        `INSERT INTO shifts
+         (shift_name, shift_date, start_time, end_time, started_by, ended_by, status)
+         VALUES (?, ?, ?, NULL, NULL, NULL, 'active')`,
+        [info.shift_name, info.shift_date, info.shift_start],
       );
-
-      currentShift = {
-        id: result.insertId,
-        shift_name: shiftInfo.shift_name,
-        shift_date: shiftInfo.shift_date,
-      };
+      id = insert.insertId;
     }
 
     await connection.query(
-      `UPDATE shift_settings SET current_shift = ? WHERE id = 1`,
-      [shiftInfo.shift_name],
+      "UPDATE shift_settings SET current_shift = ? WHERE id = 1",
+      [info.shift_name],
     );
-
     await connection.commit();
+    transactionStarted = false;
 
     return {
-      ...currentShift,
-      shift_name: shiftInfo.shift_name,
-      shift_date: shiftInfo.shift_date,
-      start_time: shiftInfo.shift_start,
+      id,
+      shift_name: info.shift_name,
+      shift_date: info.shift_date,
+      start_time: info.shift_start,
       end_time: null,
-      started_by: null,
-      ended_by: null,
       status: "active",
       automatic: true,
       timezone: TIME_ZONE,
-      scheduled_end_time: shiftInfo.shift_end,
+      scheduled_end_time: info.shift_end,
     };
   } catch (error) {
-    await connection.rollback();
+    if (transactionStarted) {
+      try {
+        await connection.rollback();
+      } catch {
+        // Nothing to roll back when the failure happened before the transaction.
+      }
+    }
     throw error;
   } finally {
     connection.release();
@@ -209,8 +198,8 @@ const ensureAutomaticShift = async () => {
 
 module.exports = {
   TIME_ZONE,
-  DAY_SHIFT_START_HOUR,
-  NIGHT_SHIFT_START_HOUR,
+  getShiftSchedule,
   getCurrentShiftInfo,
+  getManualActiveShift,
   ensureAutomaticShift,
 };

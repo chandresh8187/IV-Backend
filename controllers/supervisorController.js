@@ -38,7 +38,6 @@ const getSupervisors = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -60,6 +59,7 @@ const getActiveSupervisors = async (req, res) => {
       FROM shifts
       LEFT JOIN users ON users.id = shifts.started_by
       WHERE shifts.status = 'active'
+      AND users.id IS NOT NULL
       ORDER BY shifts.start_time DESC
     `);
 
@@ -72,7 +72,6 @@ const getActiveSupervisors = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };

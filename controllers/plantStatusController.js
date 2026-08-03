@@ -53,7 +53,6 @@ const getPlantStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to get plant status",
-      error: error.message,
     });
   }
 };
@@ -63,6 +62,9 @@ const changePlantStatus = async (req, res) => {
 
   try {
     const { status, title, message, expected_restart_at = null } = req.body;
+    const normalizedTitle = String(title || "").trim();
+    const normalizedMessage = String(message || "").trim();
+    let expectedRestartAt = null;
 
     if (!VALID_STATUSES.includes(status)) {
       return res.status(400).json({
@@ -71,11 +73,31 @@ const changePlantStatus = async (req, res) => {
       });
     }
 
-    if (status !== "running" && (!title?.trim() || !message?.trim())) {
+    if (status !== "running" && (!normalizedTitle || !normalizedMessage)) {
       return res.status(400).json({
         success: false,
         message: "title and message are required",
       });
+    }
+
+    if (normalizedTitle.length > 200 || normalizedMessage.length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: "Title cannot exceed 200 characters and message cannot exceed 1000",
+      });
+    }
+
+    if (status !== "running" && expected_restart_at) {
+      const input = String(expected_restart_at).trim();
+      const parsed = new Date(input);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Expected restart time is invalid",
+        });
+      }
+      expectedRestartAt = input.replace("T", " ").slice(0, 19);
+      if (expectedRestartAt.length === 16) expectedRestartAt += ":00";
     }
 
     await connection.beginTransaction();
@@ -125,7 +147,7 @@ const changePlantStatus = async (req, res) => {
             expected_restart_at = ?, updated_by = ?
         WHERE id = 1
         `,
-        [status, title.trim(), message.trim(), expected_restart_at, req.user.id],
+        [status, normalizedTitle, normalizedMessage, expectedRestartAt, req.user.id],
       );
 
       await connection.query(
@@ -134,7 +156,7 @@ const changePlantStatus = async (req, res) => {
           (status, title, message, started_at, expected_restart_at, started_by)
         VALUES (?, ?, ?, NOW(), ?, ?)
         `,
-        [status, title.trim(), message.trim(), expected_restart_at, req.user.id],
+        [status, normalizedTitle, normalizedMessage, expectedRestartAt, req.user.id],
       );
     }
 
@@ -161,7 +183,6 @@ const changePlantStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to change plant status",
-      error: error.message,
     });
   } finally {
     connection.release();
@@ -190,7 +211,6 @@ const getPlantStatusHistory = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to get plant status history",
-      error: error.message,
     });
   }
 };

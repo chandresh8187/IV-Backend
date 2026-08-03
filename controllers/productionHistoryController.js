@@ -56,27 +56,34 @@ const getHistoryDates = async (req, res) => {
     const [dates] = await db.query(
       `
       SELECT
-        DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
-      FROM production_entries
+        DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date,
+        ROUND(COALESCE(SUM(ms_material_weight), 0), 4) AS total_ms_production_kg,
+        ROUND(COALESCE(SUM(gi_material_weight), 0), 4) AS total_gi_production_kg
+      FROM (
+        SELECT
+          shift_date,
+          material,
+          AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0) AS ms_material_weight,
+          AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0) AS gi_material_weight
+        FROM production_entries
+        GROUP BY shift_date, material
+      ) AS daily_material_totals
       GROUP BY shift_date
       ORDER BY shift_date DESC
       `,
     );
 
-    const finalData = [];
-
-    for (const item of dates) {
-      const whereQuery = `
-        WHERE shift_date = ?
-      `;
-
-      const summary = await getTotalSummary(whereQuery, [item.shift_date]);
-
-      finalData.push({
+    const finalData = dates.map((item) => {
+      const totalMs = toNumber(item.total_ms_production_kg);
+      const totalGi = toNumber(item.total_gi_production_kg);
+      return {
         shift_date: item.shift_date,
-        ...summary,
-      });
-    }
+        total_ms_production_kg: totalMs,
+        total_gi_production_kg: totalGi,
+        zink_used: Number((totalGi - totalMs).toFixed(3)),
+        zinc_consumption: calculateZinc(totalMs, totalGi),
+      };
+    });
 
     return res.json({
       success: true,
@@ -87,7 +94,6 @@ const getHistoryDates = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -148,7 +154,6 @@ const getHistoryDateSummary = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -225,7 +230,6 @@ const getHistoryShiftTable = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -308,7 +312,6 @@ const getHistoryMaterialSummary = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
@@ -367,7 +370,6 @@ const getHistoryPlanningSummary = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };

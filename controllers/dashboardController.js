@@ -1,12 +1,17 @@
 const db = require("../config/db");
-const { ensureAutomaticShift, getCurrentShiftInfo } = require("../services/automaticShiftService");
+const {
+  ensureAutomaticShift,
+  getCurrentShiftInfo,
+  getShiftSchedule,
+} = require("../services/automaticShiftService");
 
 const getDashboardData = async (req, res) => {
   try {
+    const schedule = await getShiftSchedule();
     const activeShift = await ensureAutomaticShift();
-    const shiftInfo = getCurrentShiftInfo();
-    const currentShift = shiftInfo.shift_name;
-    const todayDate = shiftInfo.shift_date;
+    const shiftInfo = getCurrentShiftInfo(null, schedule);
+    const currentShift = activeShift?.shift_name || shiftInfo.shift_name;
+    const todayDate = activeShift?.shift_date || shiftInfo.shift_date;
 
     const [plantRows] = await db.query(
       `
@@ -158,23 +163,6 @@ const getDashboardData = async (req, res) => {
       };
     };
 
-    const getZincConsumption = async (whereQuery, params) => {
-      const [rows] = await db.query(
-        `
-        SELECT
-          ROUND(AVG(((gi_weight - ms_weight) / ms_weight) * 100), 2)
-            AS zinc_consumption
-        FROM production_entries
-        ${whereQuery}
-        AND ms_weight > 0
-        AND gi_weight > 0
-        `,
-        params,
-      );
-
-      return Number(rows[0]?.zinc_consumption) || 0;
-    };
-
     const dayWhere = `
       WHERE shift_date = ?
       AND shift_name = 'day'
@@ -185,47 +173,44 @@ const getDashboardData = async (req, res) => {
       AND shift_name = 'night'
     `;
 
-    const dayMaterialSummary = await getMaterialSummary(dayWhere, [todayDate]);
-    const nightMaterialSummary = await getMaterialSummary(nightWhere, [
-      todayDate,
-    ]);
-
-    const dayTotalSummary = await getTotalSummary(dayWhere, [todayDate]);
-    const nightTotalSummary = await getTotalSummary(nightWhere, [todayDate]);
-
     // Use Luxon's India-time operational month instead of the database server timezone.
     const monthWhere = `
       WHERE MONTH(shift_date) = ?
       AND YEAR(shift_date) = ?
     `;
 
-    const monthTotalSummary = await getTotalSummary(monthWhere, [
-      shiftInfo.month,
-      shiftInfo.year,
-    ]);
-
-    let activeShiftMaterialSummary = [];
-    let activeShiftTotalSummary = {
+    const activeWhere = "WHERE shift_id = ?";
+    const emptyActiveSummary = {
       total_ms_production_kg: 0,
       total_gi_production_kg: 0,
+      zink_used: 0,
+      zinc_consumption: 0,
     };
-    let activeShiftZincConsumption = 0;
 
-    if (activeShift) {
-      const activeWhere = `
-        WHERE shift_id = ?
-      `;
+    const [
+      dayMaterialSummary,
+      nightMaterialSummary,
+      dayTotalSummary,
+      nightTotalSummary,
+      monthTotalSummary,
+      activeShiftMaterialSummary,
+      activeShiftTotalSummary,
+    ] = await Promise.all([
+      getMaterialSummary(dayWhere, [todayDate]),
+      getMaterialSummary(nightWhere, [todayDate]),
+      getTotalSummary(dayWhere, [todayDate]),
+      getTotalSummary(nightWhere, [todayDate]),
+      getTotalSummary(monthWhere, [shiftInfo.month, shiftInfo.year]),
+      activeShift
+        ? getMaterialSummary(activeWhere, [activeShift.id])
+        : Promise.resolve([]),
+      activeShift
+        ? getTotalSummary(activeWhere, [activeShift.id])
+        : Promise.resolve(emptyActiveSummary),
+    ]);
 
-      activeShiftMaterialSummary = await getMaterialSummary(activeWhere, [
-        activeShift.id,
-      ]);
-
-      activeShiftTotalSummary = await getTotalSummary(activeWhere, [
-        activeShift.id,
-      ]);
-
-      activeShiftZincConsumption = activeShiftTotalSummary.zinc_consumption;
-    }
+    const activeShiftZincConsumption =
+      activeShiftTotalSummary.zinc_consumption;
 
     return res.json({
       success: true,
@@ -239,7 +224,7 @@ const getDashboardData = async (req, res) => {
           current_shift: currentShift,
           is_shift_active: !!activeShift,
           active_shift: activeShift,
-          automatic: true,
+          automatic: Boolean(schedule.automatic),
           timezone: shiftInfo.timezone,
           shift_start: shiftInfo.shift_start,
           shift_end: shiftInfo.shift_end,
@@ -272,7 +257,6 @@ const getDashboardData = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error",
-      error: error.message,
     });
   }
 };
