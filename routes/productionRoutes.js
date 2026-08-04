@@ -9,17 +9,42 @@ const {
   getProductions,
   getProductionById,
   deleteProduction,
-  getProductionHistory,
+  grantProductionEdit,
+  updateProductionById,
+  getProductionPreference,
+  setProductionPreference,
 } = require("../controllers/productionController");
 
 router.post(
   "/save",
   authMiddleware,
-  roleMiddleware(["supervisor", "plant_manager", "superadmin"]),
+  roleMiddleware(["supervisor", "admin", "plant_manager", "superadmin"]),
   saveProductionEntry,
 );
 
 router.get("/", authMiddleware, getProductions);
+
+router.get("/preferences/default-challan", authMiddleware, getProductionPreference);
+router.put(
+  "/preferences/default-challan",
+  authMiddleware,
+  roleMiddleware(["supervisor"]),
+  setProductionPreference,
+);
+
+router.post(
+  "/:id/edit-grant",
+  authMiddleware,
+  roleMiddleware(["superadmin"]),
+  grantProductionEdit,
+);
+
+router.put(
+  "/:id",
+  authMiddleware,
+  roleMiddleware(["superadmin"]),
+  updateProductionById,
+);
 
 router.get("/:id", authMiddleware, getProductionById);
 

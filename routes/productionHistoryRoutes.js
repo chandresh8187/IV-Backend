@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
+const roleMiddleware = require("../middleware/roleMiddleware");
+const { generateProductionReport } = require("../controllers/productionReportController");
 
 const {
   getHistoryDates,
@@ -20,5 +22,12 @@ router.get("/shift-table", authMiddleware, getHistoryShiftTable);
 router.get("/material-summary", authMiddleware, getHistoryMaterialSummary);
 
 router.get("/planning-summary", authMiddleware, getHistoryPlanningSummary);
+
+router.get(
+  "/report",
+  authMiddleware,
+  roleMiddleware(["superadmin"]),
+  generateProductionReport,
+);
 
 module.exports = router;

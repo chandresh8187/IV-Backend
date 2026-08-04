@@ -1,4 +1,6 @@
 const db = require("../config/db");
+const crypto = require("crypto");
+const fs = require("fs");
 
 const EMPTY_ANDROID_RELEASE = {
   enabled: false,
@@ -163,4 +165,31 @@ const updateAndroidRelease = async (req, res) => {
   }
 };
 
-module.exports = { getAndroidUpdate, updateAndroidRelease };
+const uploadAndroidRelease = async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: "Release APK is required" });
+  try {
+    const sha256 = await new Promise((resolve, reject) => {
+      const hash = crypto.createHash("sha256");
+      const stream = fs.createReadStream(req.file.path);
+      stream.on("error", reject);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+    });
+    const publicBase = String(process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+    return res.status(201).json({
+      success: true,
+      message: "Release APK uploaded successfully",
+      data: {
+        apkUrl: `${publicBase}/downloads/apks/${req.file.filename}`,
+        sha256,
+        fileSize: req.file.size,
+        originalName: req.file.originalname,
+      },
+    });
+  } catch (error) {
+    console.error("uploadAndroidRelease:", error);
+    return res.status(500).json({ success: false, message: "Could not process release APK" });
+  }
+};
+
+module.exports = { getAndroidUpdate, updateAndroidRelease, uploadAndroidRelease };

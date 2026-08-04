@@ -45,6 +45,8 @@ const createCertificate = async (req, res) => {
       quantity,
       inspection_date,
       reference_standard,
+      needed_coating,
+      coating_readings,
 
       visual_check_result,
       visual_check_observation,
@@ -68,8 +70,13 @@ const createCertificate = async (req, res) => {
       });
     }
 
+    const neededCoating = needed_coating === "" || needed_coating == null ? null : Number(needed_coating);
+    if (neededCoating != null && (!Number.isFinite(neededCoating) || neededCoating < 0)) {
+      return res.status(400).json({ success: false, message: "Needed coating must be a valid positive number" });
+    }
+
     const [planningRows] = await db.query(
-      `SELECT * FROM production_planning WHERE id = ? LIMIT 1`,
+      `SELECT * FROM production_planning WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
       [planning_id],
     );
 
@@ -108,6 +115,8 @@ const createCertificate = async (req, res) => {
             quantity,
             inspection_date,
             reference_standard,
+            needed_coating,
+            coating_readings_json,
             visual_check_result,
             visual_check_observation,
             adhesion_test_result,
@@ -121,7 +130,7 @@ const createCertificate = async (req, res) => {
             remarks,
             created_by
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
             tcNo,
@@ -133,6 +142,8 @@ const createCertificate = async (req, res) => {
             quantity || String(planning.planned_qty || ""),
             inspection_date,
             reference_standard,
+            neededCoating,
+            JSON.stringify(Array.isArray(coating_readings) ? coating_readings.slice(0, 10) : []),
             visual_check_result || null,
             visual_check_observation || null,
             adhesion_test_result || null,

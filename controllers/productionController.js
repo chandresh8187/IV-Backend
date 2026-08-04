@@ -50,6 +50,8 @@ const saveProductionEntry = async (req, res) => {
     const {
       entry_type,
       planning_id,
+      client_request_id,
+      offline_shift_id,
       sr_no,
 
       challan_no,
@@ -93,8 +95,34 @@ const saveProductionEntry = async (req, res) => {
       });
     }
 
+    const clientRequestId = String(client_request_id || "").trim() || null;
+    if (clientRequestId && !/^[A-Za-z0-9:_-]{8,64}$/.test(clientRequestId)) {
+      return res.status(400).json({
+        success: false,
+        message: "client_request_id must be 8-64 safe characters",
+      });
+    }
+
+    if (clientRequestId) {
+      const [replayed] = await db.query(
+        `SELECT id, sr_no, zinc_percentage, production_weight, avg_coating
+         FROM production_entries WHERE client_request_id = ? LIMIT 1`,
+        [clientRequestId],
+      );
+      if (replayed.length) {
+        return res.json({
+          success: true,
+          action: "replayed",
+          message: "Offline production entry was already synchronized",
+          data: { production_id: replayed[0].id, ...replayed[0] },
+        });
+      }
+    }
+
     const io = req.app.get("io");
 
+    const offlineShiftId = Number(offline_shift_id);
+    const hasOfflineShift = clientRequestId && Number.isInteger(offlineShiftId) && offlineShiftId > 0;
     const plantStatus = await getPlantStatusRow();
 
     if (!plantStatus) {
@@ -104,7 +132,7 @@ const saveProductionEntry = async (req, res) => {
       });
     }
 
-    if (plantStatus.status !== "running") {
+    if (plantStatus.status !== "running" && !hasOfflineShift) {
       return res.status(423).json({
         success: false,
         code:
@@ -121,7 +149,23 @@ const saveProductionEntry = async (req, res) => {
       });
     }
 
-    const activeShift = await getActiveShift();
+    let activeShift = await getActiveShift();
+    if (hasOfflineShift) {
+      const [offlineShifts] = await db.query(
+        `SELECT * FROM shifts WHERE id=?
+         AND shift_date >= CURDATE() - INTERVAL 7 DAY
+         LIMIT 1`,
+        [offlineShiftId],
+      );
+      if (!offlineShifts.length) {
+        return res.status(409).json({
+          success: false,
+          code: "OFFLINE_SHIFT_EXPIRED",
+          message: "This offline entry belongs to a shift that ended more than 7 days ago",
+        });
+      }
+      activeShift = offlineShifts[0];
+    }
 
     if (!activeShift) {
       return res.status(409).json({
@@ -144,6 +188,35 @@ const saveProductionEntry = async (req, res) => {
     );
 
     const existingRow = existingRows.length > 0 ? existingRows[0] : null;
+    let activeEditGrantId = null;
+
+    if (!existingRow && req.user.role === "admin") {
+      return res.status(403).json({
+        success: false,
+        code: "CREATE_PRODUCTION_FORBIDDEN",
+        message: "Admins can edit only an SR row unlocked for them by a superadmin",
+      });
+    }
+
+    // Every non-superadmin account needs the one-time row grant before it can
+    // update an existing entry. The grant is consumed after a successful save.
+    if (existingRow && req.user.role !== "superadmin") {
+      const [grantRows] = await db.query(
+        `SELECT id FROM production_edit_grants
+         WHERE production_entry_id = ? AND user_id = ?
+           AND used_at IS NULL AND revoked_at IS NULL
+         ORDER BY id DESC LIMIT 1`,
+        [existingRow.id, req.user.id],
+      );
+      if (!grantRows.length) {
+        return res.status(403).json({
+          success: false,
+          code: "EDIT_GRANT_REQUIRED",
+          message: "A superadmin must unlock this SR row for your account first",
+        });
+      }
+      activeEditGrantId = grantRows[0].id;
+    }
 
     // FULL ENTRY
     if (entry_type === "full") {
@@ -174,7 +247,7 @@ const saveProductionEntry = async (req, res) => {
         await connection.beginTransaction();
 
         const [planningRows] = await connection.query(
-          `SELECT * FROM production_planning WHERE id = ? FOR UPDATE`,
+          `SELECT * FROM production_planning WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
           [Number(planning_id)],
         );
 
@@ -351,6 +424,12 @@ const saveProductionEntry = async (req, res) => {
               [oldCompletedQty, oldCompletedQty, existingRow.planning_id],
             );
           }
+          if (activeEditGrantId) {
+            await connection.query(
+              "UPDATE production_edit_grants SET used_at = NOW() WHERE id = ? AND used_at IS NULL",
+              [activeEditGrantId],
+            );
+          }
           await connection.commit();
 
           io.emit("production_updated", {
@@ -396,6 +475,7 @@ const saveProductionEntry = async (req, res) => {
       shift_name,
       sr_no,
       planning_id,
+      client_request_id,
       challan_no,
       party_name,
       material,
@@ -415,7 +495,7 @@ const saveProductionEntry = async (req, res) => {
       row_type,
       created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?)
     `,
           [
             activeShift.id,
@@ -423,6 +503,7 @@ const saveProductionEntry = async (req, res) => {
             activeShift.shift_name,
             nextSrNo,
             Number(planning_id),
+            clientRequestId,
             challan_no,
             party_name,
             material,
@@ -769,14 +850,28 @@ const getProductions = async (req, res) => {
       SELECT 
         production_entries.*,
         creator.name AS created_by_name,
-        updater.name AS updated_by_name
+        updater.name AS updated_by_name,
+        CASE
+          WHEN ? = 'superadmin' THEN 1
+          WHEN EXISTS (
+            SELECT 1 FROM production_edit_grants peg
+            WHERE peg.production_entry_id = production_entries.id
+              AND peg.user_id = ? AND peg.used_at IS NULL AND peg.revoked_at IS NULL
+          ) THEN 1 ELSE 0
+        END AS can_edit,
+        active_grant.user_id AS editable_user_id,
+        grant_user.name AS editable_user_name
       FROM production_entries
       LEFT JOIN users AS creator ON creator.id = production_entries.created_by
       LEFT JOIN users AS updater ON updater.id = production_entries.updated_by
+      LEFT JOIN production_edit_grants active_grant
+        ON active_grant.production_entry_id = production_entries.id
+       AND active_grant.used_at IS NULL AND active_grant.revoked_at IS NULL
+      LEFT JOIN users AS grant_user ON grant_user.id = active_grant.user_id
       WHERE 1 = 1
     `;
 
-    const params = [];
+    const params = [req.user.role, req.user.id];
 
     if (shift_date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(shift_date))) {
@@ -951,9 +1046,158 @@ const deleteProduction = async (req, res) => {
   }
 };
 
+const grantProductionEdit = async (req, res) => {
+  const entryId = Number(req.params.id);
+  const userId = Number(req.body.user_id);
+  if (!Number.isInteger(entryId) || !Number.isInteger(userId)) {
+    return res.status(400).json({ success: false, message: "Valid entry and user are required" });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [entries] = await connection.query(
+      "SELECT id, sr_no, shift_id FROM production_entries WHERE id = ? FOR UPDATE",
+      [entryId],
+    );
+    const [users] = await connection.query(
+      `SELECT id, name, role FROM users
+       WHERE id = ? AND status = 'active'
+         AND role IN ('superadmin', 'plant_manager', 'admin', 'supervisor')
+       LIMIT 1`,
+      [userId],
+    );
+    if (!entries.length || !users.length) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Production row or active user not found" });
+    }
+
+    // Exactly one delegated production edit may be active system-wide.
+    await connection.query(
+      `UPDATE production_edit_grants SET revoked_at = NOW()
+       WHERE used_at IS NULL AND revoked_at IS NULL`,
+    );
+    const [result] = await connection.query(
+      `INSERT INTO production_edit_grants (production_entry_id, user_id, granted_by)
+       VALUES (?, ?, ?)`,
+      [entryId, userId, req.user.id],
+    );
+    await connection.commit();
+    req.app.get("io")?.emit("production_edit_grant_updated", {
+      entry_id: entryId,
+      user_id: userId,
+      grant_id: result.insertId,
+    });
+    return res.json({
+      success: true,
+      message: `SR ${entries[0].sr_no} is editable once by ${users[0].name}`,
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("grantProductionEdit:", error);
+    return res.status(500).json({ success: false, message: "Could not grant edit access" });
+  } finally {
+    connection.release();
+  }
+};
+
+const updateProductionById = async (req, res) => {
+  const entryId = Number(req.params.id);
+  if (!Number.isInteger(entryId)) {
+    return res.status(400).json({ success: false, message: "Invalid production entry id" });
+  }
+  const fields = [
+    "planning_id", "challan_no", "party_name", "material", "production_time",
+    "dipping_qty", "kettle_temperature", "ms_weight", "gi_weight",
+    "c1", "c2", "c3", "c4", "c5",
+  ];
+  const [rows] = await db.query("SELECT * FROM production_entries WHERE id = ? LIMIT 1", [entryId]);
+  if (!rows.length) return res.status(404).json({ success: false, message: "Production entry not found" });
+  const current = rows[0];
+  const next = Object.fromEntries(fields.map((key) => [key, req.body[key] ?? current[key]]));
+  const qty = Number(next.dipping_qty);
+  if (!Number.isInteger(qty) || qty <= 0) {
+    return res.status(400).json({ success: false, message: "Dipping quantity must be a positive whole number" });
+  }
+  const zinc = calculateZincPercentage(next.ms_weight, next.gi_weight);
+  const weight = calculateProductionWeight(qty, next.ms_weight);
+  const coating = calculateAvgCoating([next.c1, next.c2, next.c3, next.c4, next.c5]);
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query(
+      `UPDATE production_entries SET planning_id=?, challan_no=?, party_name=?, material=?,
+       production_time=?, dipping_qty=?, kettle_temperature=?, ms_weight=?, gi_weight=?,
+       zinc_percentage=?, production_weight=?, c1=?, c2=?, c3=?, c4=?, c5=?, avg_coating=?, updated_by=?
+       WHERE id=?`,
+      [next.planning_id || null, next.challan_no, next.party_name, next.material,
+       next.production_time || null, qty, next.kettle_temperature || null,
+       next.ms_weight || null, next.gi_weight || null, zinc, weight,
+       next.c1 || null, next.c2 || null, next.c3 || null, next.c4 || null,
+       next.c5 || null, coating, req.user.id, entryId],
+    );
+    const affectedPlans = [...new Set([current.planning_id, next.planning_id].filter(Boolean).map(Number))];
+    for (const planId of affectedPlans) {
+      const [totals] = await connection.query(
+        "SELECT COALESCE(SUM(dipping_qty),0) completed_qty FROM production_entries WHERE planning_id=? AND COALESCE(row_type,'entry')='entry'",
+        [planId],
+      );
+      const completed = Number(totals[0].completed_qty) || 0;
+      await connection.query(
+        `UPDATE production_planning SET completed_qty=?, status=CASE WHEN planned_qty<=? THEN 'completed' ELSE 'pending' END WHERE id=? AND deleted_at IS NULL`,
+        [completed, completed, planId],
+      );
+    }
+    await connection.commit();
+    req.app.get("io")?.emit("production_updated", { action: "history_updated", production_id: entryId });
+    notifyZincSafely({ entryId, io: req.app.get("io") });
+    return res.json({ success: true, message: "Production entry updated successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("updateProductionById:", error);
+    return res.status(500).json({ success: false, message: "Could not update production entry" });
+  } finally {
+    connection.release();
+  }
+};
+
+const getProductionPreference = async (req, res) => {
+  const [rows] = await db.query(
+    `SELECT upp.default_planning_id, pp.challan_no, pp.party_name, pp.material_description,
+            pp.planned_qty, pp.completed_qty, (pp.planned_qty-pp.completed_qty) remaining_qty
+     FROM user_production_preferences upp
+     LEFT JOIN production_planning pp ON pp.id=upp.default_planning_id AND pp.deleted_at IS NULL
+     WHERE upp.user_id=? LIMIT 1`,
+    [req.user.id],
+  );
+  return res.json({ success: true, data: rows[0] || { default_planning_id: null } });
+};
+
+const setProductionPreference = async (req, res) => {
+  const planningId = req.body.planning_id == null ? null : Number(req.body.planning_id);
+  if (planningId) {
+    const [plans] = await db.query(
+      "SELECT id FROM production_planning WHERE id=? AND deleted_at IS NULL AND status='pending' LIMIT 1",
+      [planningId],
+    );
+    if (!plans.length) return res.status(404).json({ success: false, message: "Available planning challan not found" });
+  }
+  await db.query(
+    `INSERT INTO user_production_preferences (user_id, default_planning_id) VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE default_planning_id=VALUES(default_planning_id), updated_at=CURRENT_TIMESTAMP`,
+    [req.user.id, planningId],
+  );
+  return res.json({ success: true, message: planningId ? "Default challan saved" : "Default challan removed" });
+};
+
 module.exports = {
   saveProductionEntry,
   getProductions,
   getProductionById,
   deleteProduction,
+  grantProductionEdit,
+  updateProductionById,
+  getProductionPreference,
+  setProductionPreference,
 };

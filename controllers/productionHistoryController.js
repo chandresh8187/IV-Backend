@@ -53,6 +53,10 @@ const getTotalSummary = async (whereQuery, params) => {
 
 const getHistoryDates = async (req, res) => {
   try {
+    const month = String(req.query.month || "").trim();
+    if (month && !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ success: false, message: "month must use YYYY-MM format" });
+    }
     const [dates] = await db.query(
       `
       SELECT
@@ -66,11 +70,13 @@ const getHistoryDates = async (req, res) => {
           AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0) AS ms_material_weight,
           AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0) AS gi_material_weight
         FROM production_entries
+        WHERE (? = '' OR DATE_FORMAT(shift_date, '%Y-%m') = ?)
         GROUP BY shift_date, material
       ) AS daily_material_totals
       GROUP BY shift_date
       ORDER BY shift_date DESC
       `,
+      [month, month],
     );
 
     const finalData = dates.map((item) => {
@@ -350,7 +356,8 @@ const getHistoryPlanningSummary = async (req, res) => {
         ) AS completion_percentage
 
       FROM production_planning pp
-      WHERE pp.challan_no IN (
+      WHERE pp.deleted_at IS NULL
+      AND pp.challan_no IN (
         SELECT DISTINCT challan_no
         FROM production_entries
         WHERE shift_date = ?

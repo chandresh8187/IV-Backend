@@ -12,6 +12,7 @@ const createProductionPlanning = async (req, res) => {
       party_name,
       material_description,
       planned_qty,
+      target_zinc_percentage,
       third_party_name,
     } = req.body;
 
@@ -30,6 +31,13 @@ const createProductionPlanning = async (req, res) => {
       });
     }
 
+    const targetPercentage = target_zinc_percentage === "" || target_zinc_percentage == null
+      ? null
+      : Number(target_zinc_percentage);
+    if (targetPercentage != null && (!Number.isFinite(targetPercentage) || targetPercentage <= 0 || targetPercentage > 100)) {
+      return res.status(400).json({ success: false, message: "Target zinc percentage must be between 0 and 100" });
+    }
+
     const [result] = await db.query(
       `
       INSERT INTO production_planning
@@ -38,16 +46,18 @@ const createProductionPlanning = async (req, res) => {
         party_name,
         material_description,
         planned_qty,
+        target_zinc_percentage,
         third_party_name,
         created_by
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
         challan_no,
         party_name,
         material_description,
         planned_qty,
+        targetPercentage,
         third_party_name || null,
         req.user.id,
       ],
@@ -83,6 +93,7 @@ const updateProductionPlanning = async (req, res) => {
       party_name,
       material_description,
       planned_qty,
+      target_zinc_percentage,
       third_party_name,
       status,
     } = req.body;
@@ -103,7 +114,7 @@ const updateProductionPlanning = async (req, res) => {
     }
 
     const [existingRows] = await db.query(
-      `SELECT completed_qty FROM production_planning WHERE id = ? LIMIT 1`,
+      `SELECT completed_qty FROM production_planning WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
       [id],
     );
     if (existingRows.length === 0) {
@@ -119,10 +130,14 @@ const updateProductionPlanning = async (req, res) => {
       });
     }
 
-    const finalStatus =
-      status === "canceled"
-        ? "canceled"
-        : plannedQuantity <= Number(existingRows[0].completed_qty)
+    const targetPercentage = target_zinc_percentage === "" || target_zinc_percentage == null
+      ? null
+      : Number(target_zinc_percentage);
+    if (targetPercentage != null && (!Number.isFinite(targetPercentage) || targetPercentage <= 0 || targetPercentage > 100)) {
+      return res.status(400).json({ success: false, message: "Target zinc percentage must be between 0 and 100" });
+    }
+
+    const finalStatus = plannedQuantity <= Number(existingRows[0].completed_qty)
           ? "completed"
           : "pending";
 
@@ -134,6 +149,7 @@ const updateProductionPlanning = async (req, res) => {
         party_name = ?,
         material_description = ?,
         planned_qty = ?,
+        target_zinc_percentage = ?,
         third_party_name = ?,
         status = ?,
         updated_by = ?
@@ -144,6 +160,7 @@ const updateProductionPlanning = async (req, res) => {
         party_name,
         material_description,
         plannedQuantity,
+        targetPercentage,
         third_party_name || null,
         finalStatus,
         req.user.id,
@@ -173,25 +190,34 @@ const deleteProductionPlanning = async (req, res) => {
   try {
     const { id } = req.params;
 
-    await db.query(
-      `
-      UPDATE production_planning
-      SET status = 'canceled',
-          updated_by = ?
-      WHERE id = ?
-      `,
+    const [result] = await db.query(
+      `UPDATE production_planning
+       SET deleted_at = NOW(), updated_by = ?
+       WHERE id = ? AND deleted_at IS NULL`,
       [req.user.id, id],
+    );
+    if (!result.affectedRows) {
+      return res.status(404).json({ success: false, message: "Production planning not found" });
+    }
+
+    await db.query(
+      "UPDATE production_edit_grants peg JOIN production_entries pe ON pe.id=peg.production_entry_id SET peg.revoked_at=NOW() WHERE pe.planning_id=? AND peg.used_at IS NULL AND peg.revoked_at IS NULL",
+      [id],
+    );
+    await db.query(
+      "UPDATE user_production_preferences SET default_planning_id=NULL WHERE default_planning_id=?",
+      [id],
     );
 
     const io = req.app.get("io");
     io.emit("production_planning_updated", {
-      action: "canceled",
+      action: "deleted",
       id: Number(id),
     });
 
     return res.json({
       success: true,
-      message: "Production planning canceled successfully",
+      message: "Production planning deleted successfully",
     });
   } catch (error) {
     return res.status(500).json({
@@ -212,7 +238,7 @@ const getProductionPlanning = async (req, res) => {
         creator.name AS created_by_name
       FROM production_planning pp
       LEFT JOIN users creator ON creator.id = pp.created_by
-      WHERE 1 = 1
+      WHERE pp.deleted_at IS NULL
     `;
 
     const params = [];
@@ -254,6 +280,7 @@ const getAvailablePlanningDropdown = async (req, res) => {
         third_party_name
       FROM production_planning
       WHERE status = 'pending'
+      AND deleted_at IS NULL
       AND planned_qty > completed_qty
       ORDER BY challan_no ASC
       `,

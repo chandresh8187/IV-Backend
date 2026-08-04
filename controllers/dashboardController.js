@@ -127,7 +127,8 @@ const getDashboardData = async (req, res) => {
             AS total_ms_production_kg,
 
           ROUND(COALESCE(SUM(gi_material_weight), 0), 3)
-            AS total_gi_production_kg
+            AS total_gi_production_kg,
+          COALESCE(SUM(material_qty), 0) AS total_dipping_qty
 
         FROM (
           SELECT
@@ -137,7 +138,8 @@ const getDashboardData = async (req, res) => {
               AS ms_material_weight,
 
             AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-              AS gi_material_weight
+              AS gi_material_weight,
+            COALESCE(SUM(dipping_qty), 0) AS material_qty
 
           FROM production_entries
           ${whereQuery}
@@ -149,6 +151,7 @@ const getDashboardData = async (req, res) => {
 
       const totalMs = Number(rows[0]?.total_ms_production_kg) || 0;
       const totalGi = Number(rows[0]?.total_gi_production_kg) || 0;
+      const totalQty = Number(rows[0]?.total_dipping_qty) || 0;
 
       const differenceKg = Number((totalGi - totalMs).toFixed(1));
 
@@ -160,6 +163,7 @@ const getDashboardData = async (req, res) => {
         total_gi_production_kg: totalGi,
         zink_used: differenceKg,
         zinc_consumption: differencePercentage,
+        total_dipping_qty: totalQty,
       };
     };
 
@@ -188,26 +192,46 @@ const getDashboardData = async (req, res) => {
     };
 
     const [
-      dayMaterialSummary,
-      nightMaterialSummary,
       dayTotalSummary,
       nightTotalSummary,
       monthTotalSummary,
-      activeShiftMaterialSummary,
       activeShiftTotalSummary,
     ] = await Promise.all([
-      getMaterialSummary(dayWhere, [todayDate]),
-      getMaterialSummary(nightWhere, [todayDate]),
       getTotalSummary(dayWhere, [todayDate]),
       getTotalSummary(nightWhere, [todayDate]),
       getTotalSummary(monthWhere, [shiftInfo.month, shiftInfo.year]),
       activeShift
-        ? getMaterialSummary(activeWhere, [activeShift.id])
-        : Promise.resolve([]),
-      activeShift
         ? getTotalSummary(activeWhere, [activeShift.id])
         : Promise.resolve(emptyActiveSummary),
     ]);
+
+    const [monthlyRows] = await db.query(
+      `SELECT DATE_FORMAT(production_date,'%Y-%m-%d') production_date,
+              COALESCE(SUM(material_qty),0) total_dipping_qty,
+              ROUND(COALESCE(SUM(ms_total),0),3) total_ms_production_kg,
+              ROUND(COALESCE(SUM(gi_total),0),3) total_gi_production_kg
+       FROM (
+         SELECT shift_date production_date, material,
+                COALESCE(SUM(dipping_qty),0) material_qty,
+                AVG(NULLIF(ms_weight,0))*COALESCE(SUM(dipping_qty),0) ms_total,
+                AVG(NULLIF(gi_weight,0))*COALESCE(SUM(dipping_qty),0) gi_total
+         FROM production_entries
+         WHERE MONTH(shift_date)=? AND YEAR(shift_date)=?
+           AND COALESCE(row_type,'entry')='entry'
+         GROUP BY shift_date, material
+       ) daily_materials
+       GROUP BY production_date ORDER BY production_date ASC`,
+      [shiftInfo.month, shiftInfo.year],
+    );
+    const monthlyProductionSummary = monthlyRows.map((row) => {
+      const totalMs = Number(row.total_ms_production_kg) || 0;
+      const totalGi = Number(row.total_gi_production_kg) || 0;
+      return {
+        ...row,
+        zink_used: Number((totalGi-totalMs).toFixed(3)),
+        zinc_consumption: totalMs > 0 ? Number((((totalGi-totalMs)/totalMs)*100).toFixed(2)) : 0,
+      };
+    });
 
     const activeShiftZincConsumption =
       activeShiftTotalSummary.zinc_consumption;
@@ -233,23 +257,21 @@ const getDashboardData = async (req, res) => {
         today_summary: {
           day_shift: {
             ...dayTotalSummary,
-            material_summary: dayMaterialSummary,
           },
 
           night_shift: {
             ...nightTotalSummary,
-            material_summary: nightMaterialSummary,
           },
         },
 
         current_month: {
           ...monthTotalSummary,
+          daily_summary: monthlyProductionSummary,
         },
 
         active_shift_summary: {
           ...activeShiftTotalSummary,
           zinc_consumption: activeShiftZincConsumption,
-          material_summary: activeShiftMaterialSummary,
         },
       },
     });
