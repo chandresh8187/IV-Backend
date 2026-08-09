@@ -33,6 +33,7 @@ const getTotalSummary = async (whereQuery, params) => {
           AS gi_material_weight
       FROM production_entries
       ${whereQuery}
+      AND COALESCE(row_type, 'entry') = 'entry'
       GROUP BY material
     ) AS material_total
     `,
@@ -71,6 +72,7 @@ const getHistoryDates = async (req, res) => {
           AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0) AS gi_material_weight
         FROM production_entries
         WHERE (? = '' OR DATE_FORMAT(shift_date, '%Y-%m') = ?)
+        AND COALESCE(row_type, 'entry') = 'entry'
         GROUP BY shift_date, material
       ) AS daily_material_totals
       GROUP BY shift_date
@@ -217,6 +219,7 @@ const getHistoryShiftTable = async (req, res) => {
       FROM production_entries
       WHERE shift_date = ?
       AND shift_name = ?
+      AND COALESCE(row_type, 'entry') = 'entry'
       ORDER BY sr_no ASC
       `,
       [date, shift_name],
@@ -293,7 +296,7 @@ const getHistoryMaterialSummary = async (req, res) => {
           /
           NULLIF(
             AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-            4
+            0
           )
           * 100,
           2
@@ -303,6 +306,7 @@ const getHistoryMaterialSummary = async (req, res) => {
 
       FROM production_entries
       WHERE shift_date = ?
+      AND COALESCE(row_type, 'entry') = 'entry'
       GROUP BY material
       ORDER BY material ASC
       `,
@@ -362,6 +366,7 @@ const getHistoryPlanningSummary = async (req, res) => {
         FROM production_entries
         WHERE shift_date = ?
         AND challan_no IS NOT NULL
+        AND COALESCE(row_type, 'entry') = 'entry'
       )
       ORDER BY pp.id DESC
       `,
