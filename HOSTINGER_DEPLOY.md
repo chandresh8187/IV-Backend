@@ -22,7 +22,8 @@ application-root/
    the files inside an additional nested folder.
 3. Set the startup file to `server.js` and use Node.js 20 or newer.
 4. Install dependencies with `npm install --omit=dev`.
-5. Restart the Node.js application from hPanel.
+5. Run `npm run migrate:status`, `npm run migrate:dry-run`, and then `npm run migrate`.
+6. Restart the Node.js application from hPanel only after migrations succeed.
 
 The startup log must contain both:
 
