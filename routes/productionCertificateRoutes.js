@@ -6,9 +6,13 @@ const roleMiddleware = require("../middleware/roleMiddleware");
 
 const {
   createCertificate,
+  getCertificateReadings,
   getCertificates,
   getCertificateById,
 } = require("../controllers/productionCertificateController");
+const {
+  generateCertificatePdf,
+} = require("../controllers/certificatePdfController");
 
 router.post(
   "/",
@@ -18,6 +22,15 @@ router.post(
 );
 
 router.get("/", authMiddleware, getCertificates);
+
+router.get("/readings", authMiddleware, getCertificateReadings);
+
+router.post(
+  "/pdf",
+  authMiddleware,
+  roleMiddleware(["admin", "superadmin"]),
+  generateCertificatePdf,
+);
 
 router.get("/:id", authMiddleware, getCertificateById);
 

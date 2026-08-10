@@ -22,7 +22,6 @@ const sendToTokens = async ({ tokens, title, body, data = {} }) => {
     android: {
       priority: "high",
       notification: {
-        channelId: "production_notifications",
         sound: "default",
       },
     },
@@ -53,7 +52,10 @@ const sendNotificationToRoles = async ({ roles, title, body, data = {} }) => {
   const fcmTokens = tokens.map((item) => item.fcm_token);
 
   if (fcmTokens.length === 0) {
-    return;
+    return {
+      successCount: 0,
+      failureCount: 0,
+    };
   }
 
   const response = await getMessaging().sendEachForMulticast({
@@ -68,17 +70,12 @@ const sendNotificationToRoles = async ({ roles, title, body, data = {} }) => {
     android: {
       priority: "high",
       notification: {
-        channelId: "default",
         sound: "default",
       },
     },
   });
 
   return response;
-};
-
-module.exports = {
-  sendNotificationToRoles,
 };
 
 const sendNotificationToUser = async ({ userId, title, body, data = {} }) => {

@@ -1,89 +1,193 @@
-const PDFDocument = require("pdfkit");
 const db = require("../config/db");
+const {
+  generateProductionPdf,
+} = require("../services/pdf/productionPdfGenerator");
 
-const safeFilename = (value) => String(value || "report").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-|-$/g, "");
+const safeFilename = value =>
+  String(value || "report")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-|-$/g, "");
+
+const toNumber = value => Number(value || 0);
+
+const calculateZinc = (totalMs, totalGi) => {
+  const ms = toNumber(totalMs);
+  const gi = toNumber(totalGi);
+
+  if (ms <= 0.001) return 0;
+  return Math.round((((gi - ms) / ms) * 100) * 100) / 100;
+};
+
+const getSummary = async (where, params) => {
+  const [rows] = await db.query(
+    `
+    SELECT
+      ROUND(COALESCE(SUM(ms_material_weight), 0), 4)
+        AS total_ms_production_kg,
+      ROUND(COALESCE(SUM(gi_material_weight), 0), 4)
+        AS total_gi_production_kg
+    FROM (
+      SELECT
+        pe.material,
+        AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
+          AS ms_material_weight,
+        AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
+          AS gi_material_weight
+      FROM production_entries pe
+      WHERE ${where}
+        AND COALESCE(pe.row_type, 'entry') = 'entry'
+      GROUP BY pe.material
+    ) AS material_total
+    `,
+    params,
+  );
+
+  const totalMs = toNumber(rows[0]?.total_ms_production_kg);
+  const totalGi = toNumber(rows[0]?.total_gi_production_kg);
+
+  return {
+    total_ms_production_kg: totalMs,
+    total_gi_production_kg: totalGi,
+    zink_used: Number((totalGi - totalMs).toFixed(3)),
+    zinc_consumption: calculateZinc(totalMs, totalGi),
+  };
+};
+
+const getReportFilter = ({ type, value, date, planningId }) => {
+  if (type === "material") {
+    return {
+      where: "pe.shift_date = ? AND LOWER(pe.material) = LOWER(?)",
+      params: [date, value],
+      reportDate: date,
+      shiftName: `${value} Material`,
+    };
+  }
+
+  if (type === "shift") {
+    return {
+      where: "pe.shift_date = ? AND pe.shift_name = ?",
+      params: [date, value.toLowerCase()],
+      reportDate: date,
+      shiftName: value,
+    };
+  }
+
+  return {
+    where: planningId ? "pe.planning_id = ?" : "pe.challan_no = ?",
+    params: [planningId || value],
+    reportDate: null,
+    shiftName: `Challan ${value}`,
+  };
+};
 
 const generateProductionReport = async (req, res) => {
   try {
     const type = String(req.query.type || "").toLowerCase();
     const value = String(req.query.value || "").trim();
     const date = String(req.query.date || "").trim();
+    const planningId = Number(req.query.planning_id) || null;
+
     if (!["challan", "material", "shift"].includes(type) || !value) {
-      return res.status(400).json({ success: false, message: "type and value are required" });
+      return res.status(400).json({
+        success: false,
+        message: "type and value are required",
+      });
     }
-    if (["material", "shift"].includes(type) && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ success: false, message: "A valid date is required" });
+    if (
+      ["material", "shift"].includes(type) &&
+      !/^\d{4}-\d{2}-\d{2}$/.test(date)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid date is required",
+      });
     }
     if (type === "shift" && !["day", "night"].includes(value.toLowerCase())) {
-      return res.status(400).json({ success: false, message: "Shift must be day or night" });
-    }
-
-    let where = "pe.challan_no = ?";
-    let params = [value];
-    let title = `Challan ${value}`;
-    if (type === "material") {
-      where = "pe.shift_date = ? AND LOWER(pe.material) = LOWER(?)";
-      params = [date, value];
-      title = `${value} - ${date}`;
-    } else if (type === "shift") {
-      where = "pe.shift_date = ? AND pe.shift_name = ?";
-      params = [date, value.toLowerCase()];
-      title = `${value.toUpperCase()} Shift - ${date}`;
-    }
-
-    const [rows] = await db.query(
-      `SELECT pe.* FROM production_entries pe
-       WHERE ${where} AND COALESCE(pe.row_type,'entry')='entry'
-       ORDER BY pe.shift_date, pe.shift_name, pe.sr_no`,
-      params,
-    );
-    if (!rows.length) return res.status(404).json({ success: false, message: "No production entries found for this report" });
-
-    const filename = `production-${type}-${safeFilename(value)}.pdf`;
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 28 });
-    doc.pipe(res);
-    doc.fontSize(18).fillColor("#16345c").text("IV SQUARE STRUCTURE", { align: "center" });
-    doc.fontSize(11).fillColor("#111827").text(`Production Report: ${title}`, { align: "center" });
-    doc.moveDown();
-
-    const columns = [
-      ["Date", 65], ["Shift", 42], ["SR", 28], ["Challan", 92], ["Material", 95],
-      ["Qty", 38], ["MS", 47], ["GI", 47], ["Zn %", 42], ["C1", 30], ["C2", 30],
-      ["C3", 30], ["C4", 30], ["C5", 30], ["Avg", 36],
-    ];
-    const drawRow = (values, header = false) => {
-      if (doc.y > 545) doc.addPage();
-      let x = 28;
-      const y = doc.y;
-      if (header) doc.rect(28, y - 2, 785, 17).fill("#e8f0fb").fillColor("#16345c");
-      else doc.fillColor("#111827");
-      doc.font(header ? "Helvetica-Bold" : "Helvetica").fontSize(7.5);
-      columns.forEach(([label, width], index) => {
-        doc.text(String(header ? label : values[index] ?? "-"), x + 2, y, { width: width - 4, height: 14, ellipsis: true });
-        x += width;
+      return res.status(400).json({
+        success: false,
+        message: "Shift must be day or night",
       });
-      doc.y = y + 17;
-    };
-    drawRow([], true);
-    rows.forEach((row) => drawRow([
-      String(row.shift_date).slice(0, 10), row.shift_name, row.sr_no, row.challan_no,
-      row.material, row.dipping_qty, row.ms_weight, row.gi_weight, row.zinc_percentage,
-      row.c1, row.c2, row.c3, row.c4, row.c5, row.avg_coating,
-    ]));
+    }
 
-    const totalQty = rows.reduce((sum, row) => sum + (Number(row.dipping_qty) || 0), 0);
-    const totalMs = rows.reduce((sum, row) => sum + (Number(row.ms_weight) || 0) * (Number(row.dipping_qty) || 0), 0);
-    const totalGi = rows.reduce((sum, row) => sum + (Number(row.gi_weight) || 0) * (Number(row.dipping_qty) || 0), 0);
-    doc.moveDown().font("Helvetica-Bold").fontSize(9).text(
-      `Entries: ${rows.length}   Quantity: ${totalQty} NOS   MS: ${totalMs.toFixed(3)} kg   GI: ${totalGi.toFixed(3)} kg   Zinc: ${totalMs > 0 ? (((totalGi-totalMs)/totalMs)*100).toFixed(2) : "0.00"}%`,
+    if (
+      type === "challan" &&
+      req.query.planning_id != null &&
+      (!Number.isInteger(planningId) || planningId < 1)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "planning_id must be a positive whole number",
+      });
+    }
+
+    const filter = getReportFilter({ type, value, date, planningId });
+    const [tableData] = await db.query(
+      `
+      SELECT
+        pe.id,
+        pe.shift_id,
+        DATE_FORMAT(pe.shift_date, '%Y-%m-%d') AS shift_date,
+        pe.shift_name,
+        pe.sr_no,
+        pe.production_time,
+        pe.challan_no,
+        pe.party_name,
+        pe.material,
+        pe.dipping_qty,
+        pe.kettle_temperature,
+        pe.ms_weight,
+        pe.gi_weight,
+        pe.zinc_percentage,
+        pe.production_weight,
+        pe.c1,
+        pe.c2,
+        pe.c3,
+        pe.c4,
+        pe.c5,
+        pe.avg_coating
+      FROM production_entries pe
+      WHERE ${filter.where}
+        AND COALESCE(pe.row_type, 'entry') = 'entry'
+      ORDER BY pe.shift_date, pe.shift_name, pe.sr_no
+      `,
+      filter.params,
     );
-    doc.end();
+
+    if (!tableData.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No production entries found for this report",
+      });
+    }
+
+    const summary = await getSummary(filter.where, filter.params);
+    const firstDate = tableData[0].shift_date;
+    const lastDate = tableData[tableData.length - 1].shift_date;
+    const reportDate =
+      filter.reportDate ||
+      (firstDate === lastDate ? firstDate : `${firstDate} to ${lastDate}`);
+    const pdfBuffer = await generateProductionPdf({
+      date: reportDate,
+      shiftName: filter.shiftName,
+      reportType: type,
+      summary,
+      tableData,
+    });
+    const filename = `production-${type}-${safeFilename(value)}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`,
+    );
+    return res.end(pdfBuffer);
   } catch (error) {
     console.error("generateProductionReport:", error);
-    if (!res.headersSent) return res.status(500).json({ success: false, message: "Could not generate production report" });
-    res.end();
+    return res.status(500).json({
+      success: false,
+      message: "Could not generate production report",
+    });
   }
 };
 

@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node scripts/migrate.js up",
+    "migrate:status": "node scripts/migrate.js status",
+    "migrate:dry-run": "node scripts/migrate.js up --dry-run",
+    "migration:create": "node scripts/createMigration.js"
   },
   "keywords": [],
   "author": "",
@@ -24,8 +28,8 @@
     "luxon": "^3.7.2",
     "multer": "^2.2.0",
     "mysql2": "^3.22.3",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
-    "pdfkit": "^0.19.1",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

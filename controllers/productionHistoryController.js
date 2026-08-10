@@ -349,25 +349,36 @@ const getHistoryPlanningSummary = async (req, res) => {
         pp.third_party_name,
         pp.status,
         (pp.planned_qty - pp.completed_qty) AS remaining_qty,
-
-        ROUND(
-          CASE
-            WHEN pp.planned_qty > 0
-            THEN (pp.completed_qty / pp.planned_qty) * 100
-            ELSE 0
-          END,
-          2
-        ) AS completion_percentage
-
+        COALESCE(SUM(
+          CASE WHEN LOWER(pe.shift_name) = 'day'
+            THEN pe.dipping_qty ELSE 0 END
+        ), 0) AS day_produced_qty,
+        COALESCE(SUM(
+          CASE WHEN LOWER(pe.shift_name) = 'night'
+            THEN pe.dipping_qty ELSE 0 END
+        ), 0) AS night_produced_qty,
+        COALESCE(SUM(
+          CASE WHEN LOWER(pe.shift_name) IN ('day', 'night')
+            THEN pe.dipping_qty ELSE 0 END
+        ), 0) AS total_produced_qty
       FROM production_planning pp
+      INNER JOIN production_entries pe
+        ON pe.shift_date = ?
+       AND COALESCE(pe.row_type, 'entry') = 'entry'
+       AND (
+         pe.planning_id = pp.id
+         OR (pe.planning_id IS NULL AND pe.challan_no = pp.challan_no)
+       )
       WHERE pp.deleted_at IS NULL
-      AND pp.challan_no IN (
-        SELECT DISTINCT challan_no
-        FROM production_entries
-        WHERE shift_date = ?
-        AND challan_no IS NOT NULL
-        AND COALESCE(row_type, 'entry') = 'entry'
-      )
+      GROUP BY
+        pp.id,
+        pp.challan_no,
+        pp.party_name,
+        pp.material_description,
+        pp.planned_qty,
+        pp.completed_qty,
+        pp.third_party_name,
+        pp.status
       ORDER BY pp.id DESC
       `,
       [date],

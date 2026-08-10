@@ -61,64 +61,6 @@ const getDashboardData = async (req, res) => {
         : null,
     };
 
-    const getMaterialSummary = async (whereQuery, params) => {
-      const [rows] = await db.query(
-        `
-    SELECT
-      material,
-
-      ROUND(AVG(NULLIF(ms_weight, 0)), 3) AS avg_ms_weight,
-      ROUND(AVG(NULLIF(gi_weight, 0)), 3) AS avg_gi_weight,
-
-      COALESCE(SUM(dipping_qty), 0) AS total_dip_qty,
-
-      ROUND(
-        AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-        3
-      ) AS total_ms_production_kg,
-
-      ROUND(
-        AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0),
-        3
-      ) AS total_gi_production_kg,
-
-      ROUND(
-        (
-          AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-        ) -
-        (
-          AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-        ),
-        3
-      ) AS zink_used,
-
-      ROUND(
-        (
-          (
-            AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-          ) -
-          (
-            AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-          )
-        )
-        /
-        (
-          AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-        )
-        * 100,
-        2
-      ) AS zinc_consumption
-
-    FROM production_entries
-    ${whereQuery}
-    GROUP BY material
-    `,
-        params,
-      );
-
-      return rows;
-    };
-
     const getTotalSummary = async (whereQuery, params) => {
       const [rows] = await db.query(
         `
@@ -276,6 +218,7 @@ const getDashboardData = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("getDashboardData:", error);
     return res.status(500).json({
       success: false,
       message: "Server error",

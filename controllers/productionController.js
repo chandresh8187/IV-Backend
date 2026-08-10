@@ -1,7 +1,6 @@
 const db = require("../config/db");
 const { ensureAutomaticShift } = require("../services/automaticShiftService");
 const { getPlantStatusRow } = require("./plantStatusController");
-const { checkPlanningCompletion } = require("../utils/checkPlanningCompletion");
 const {
   checkEntryZincNotification,
 } = require("../utils/checkEntryZincNotification");
@@ -10,6 +9,15 @@ const notifyZincSafely = ({ entryId, io }) => {
   checkEntryZincNotification({ entryId, io }).catch((error) => {
     console.error("Zinc notification failed:", error);
   });
+};
+
+const consumeEditGrant = async (queryable, grantId) => {
+  if (!grantId) return;
+
+  await queryable.query(
+    "UPDATE production_edit_grants SET used_at = NOW() WHERE id = ? AND used_at IS NULL",
+    [grantId],
+  );
 };
 const calculateZincPercentage = (msWeight, giWeight) => {
   const ms = Number(msWeight);
@@ -424,12 +432,7 @@ const saveProductionEntry = async (req, res) => {
               [oldCompletedQty, oldCompletedQty, existingRow.planning_id],
             );
           }
-          if (activeEditGrantId) {
-            await connection.query(
-              "UPDATE production_edit_grants SET used_at = NOW() WHERE id = ? AND used_at IS NULL",
-              [activeEditGrantId],
-            );
-          }
+          await consumeEditGrant(connection, activeEditGrantId);
           await connection.commit();
 
           io.emit("production_updated", {
@@ -595,6 +598,8 @@ const saveProductionEntry = async (req, res) => {
           [challan_no, party_name, material, req.user.id, existingRow.id],
         );
 
+        await consumeEditGrant(db, activeEditGrantId);
+
         io.emit("production_updated", {
           action: "basic_updated",
           type: "updated",
@@ -696,6 +701,8 @@ const saveProductionEntry = async (req, res) => {
         ],
       );
 
+      await consumeEditGrant(db, activeEditGrantId);
+
       io.emit("production_updated", {
         action: "dip_updated",
         type: "updated",
@@ -752,6 +759,8 @@ const saveProductionEntry = async (req, res) => {
         ],
       );
 
+      await consumeEditGrant(db, activeEditGrantId);
+
       io.emit("production_updated", {
         action: "weight_updated",
         type: "updated",
@@ -802,6 +811,8 @@ const saveProductionEntry = async (req, res) => {
         ],
       );
 
+      await consumeEditGrant(db, activeEditGrantId);
+
       io.emit("production_updated", {
         action: "coating_updated",
         type: "updated",
@@ -821,6 +832,7 @@ const saveProductionEntry = async (req, res) => {
       });
     }
   } catch (error) {
+    console.error("saveProductionEntry:", error);
     return res.status(500).json({
       success: false,
       message: "Server error",

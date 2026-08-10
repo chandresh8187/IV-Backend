@@ -37,6 +37,121 @@ const generateNextTcNo = async (inspectionDate) => {
   return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 };
 
+const getCertificateReadings = async (req, res) => {
+  try {
+    const planningId = Number(req.query.planning_id);
+    const minimumInput = String(req.query.minimum ?? "").trim();
+    const maximumInput = String(req.query.maximum ?? "").trim();
+    const hasMinimum = minimumInput !== "";
+    const hasMaximum = maximumInput !== "";
+
+    if (!Number.isInteger(planningId) || planningId < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "planning_id must be a positive whole number",
+      });
+    }
+
+    if (hasMinimum !== hasMaximum) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter both minimum and maximum coating values",
+      });
+    }
+
+    const minimum = hasMinimum ? Number(minimumInput) : 80;
+    const maximum = hasMaximum ? Number(maximumInput) : null;
+
+    if (
+      !Number.isFinite(minimum) ||
+      minimum < 0 ||
+      (maximum != null && (!Number.isFinite(maximum) || maximum < 0))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Coating range values must be valid positive numbers",
+      });
+    }
+
+    if (maximum != null && minimum > maximum) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum coating cannot be greater than maximum coating",
+      });
+    }
+
+    const averageExpression = `COALESCE(
+      NULLIF(pe.avg_coating, 0),
+      (pe.c1 + pe.c2 + pe.c3 + pe.c4 + pe.c5) / 5
+    )`;
+    const rangeCondition = maximum == null
+      ? `${averageExpression} >= ?`
+      : `${averageExpression} BETWEEN ? AND ?`;
+    const rangeParams = maximum == null ? [minimum] : [minimum, maximum];
+    const baseWhere = `(pe.planning_id = ? OR (
+        pe.planning_id IS NULL
+        AND pe.challan_no = (
+          SELECT challan_no
+          FROM production_planning
+          WHERE id = ? AND deleted_at IS NULL
+          LIMIT 1
+        )
+      ))
+      AND COALESCE(pe.row_type, 'entry') = 'entry'
+      AND pe.c1 > 0
+      AND pe.c2 > 0
+      AND pe.c3 > 0
+      AND pe.c4 > 0
+      AND pe.c5 > 0
+      AND ${rangeCondition}`;
+    const params = [planningId, planningId, ...rangeParams];
+
+    const [[countRow]] = await db.query(
+      `SELECT COUNT(*) AS matching_count
+       FROM production_entries pe
+       WHERE ${baseWhere}`,
+      params,
+    );
+    const [rows] = await db.query(
+      `SELECT
+         pe.id,
+         pe.sr_no,
+         DATE_FORMAT(pe.shift_date, '%Y-%m-%d') AS shift_date,
+         pe.shift_name,
+         pe.c1,
+         pe.c2,
+         pe.c3,
+         pe.c4,
+         pe.c5,
+         ROUND(${averageExpression}, 2) AS avg_coating
+       FROM production_entries pe
+       WHERE ${baseWhere}
+       ORDER BY RAND()
+       LIMIT 10`,
+      params,
+    );
+
+    return res.json({
+      success: true,
+      message: "Certificate coating readings selected successfully",
+      data: {
+        readings: rows,
+        matching_count: Number(countRow?.matching_count) || 0,
+        selected_count: rows.length,
+        minimum,
+        maximum,
+        used_default_range: !hasMinimum,
+      },
+    });
+  } catch (error) {
+    console.error("getCertificateReadings:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Could not load certificate coating readings",
+    });
+  }
+};
+
 const createCertificate = async (req, res) => {
   try {
     const {
@@ -45,7 +160,6 @@ const createCertificate = async (req, res) => {
       quantity,
       inspection_date,
       reference_standard,
-      needed_coating,
       coating_readings,
 
       visual_check_result,
@@ -68,11 +182,6 @@ const createCertificate = async (req, res) => {
         message:
           "planning_id, inspection_date and reference_standard are required",
       });
-    }
-
-    const neededCoating = needed_coating === "" || needed_coating == null ? null : Number(needed_coating);
-    if (neededCoating != null && (!Number.isFinite(neededCoating) || neededCoating < 0)) {
-      return res.status(400).json({ success: false, message: "Needed coating must be a valid positive number" });
     }
 
     const [planningRows] = await db.query(
@@ -115,7 +224,6 @@ const createCertificate = async (req, res) => {
             quantity,
             inspection_date,
             reference_standard,
-            needed_coating,
             coating_readings_json,
             visual_check_result,
             visual_check_observation,
@@ -130,7 +238,7 @@ const createCertificate = async (req, res) => {
             remarks,
             created_by
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
             tcNo,
@@ -142,7 +250,6 @@ const createCertificate = async (req, res) => {
             quantity || String(planning.planned_qty || ""),
             inspection_date,
             reference_standard,
-            neededCoating,
             JSON.stringify(Array.isArray(coating_readings) ? coating_readings.slice(0, 10) : []),
             visual_check_result || null,
             visual_check_observation || null,
@@ -270,6 +377,7 @@ const getCertificateById = async (req, res) => {
 
 module.exports = {
   createCertificate,
+  getCertificateReadings,
   getCertificates,
   getCertificateById,
 };
