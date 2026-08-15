@@ -10,6 +10,23 @@ const { validateMigrationSql } = require("./migrationSafety");
 const MIGRATIONS_DIRECTORY = path.join(__dirname, "..", "migrations", "versioned");
 const MIGRATION_LOCK = "iv_api_schema_migrations";
 
+function getMigrationChecksums(sql) {
+  const normalizedSql = sql.replace(/\r\n?/g, "\n");
+  const lineEndingVariants = new Set([
+    sql,
+    normalizedSql,
+    normalizedSql.replace(/\n/g, "\r\n"),
+  ]);
+  const hash = (value) => crypto.createHash("sha256").update(value).digest("hex");
+
+  return {
+    // New migration records always use the platform-independent LF checksum.
+    checksum: hash(normalizedSql),
+    // Accept checksums created by older runner versions on Windows or Linux.
+    acceptedChecksums: new Set([...lineEndingVariants].map(hash)),
+  };
+}
+
 function getDatabaseConfig() {
   const required = ["DB_HOST", "DB_USER", "DB_NAME"];
   const missing = required.filter((key) => !String(process.env[key] || "").trim());
@@ -34,8 +51,8 @@ function loadMigrationFiles() {
     .map((entry) => {
       const filename = entry.name;
       const sql = fs.readFileSync(path.join(MIGRATIONS_DIRECTORY, filename), "utf8");
-      const checksum = crypto.createHash("sha256").update(sql).digest("hex");
-      return { filename, sql, checksum };
+      const checksums = getMigrationChecksums(sql);
+      return { filename, sql, ...checksums };
     })
     .sort((left, right) => left.filename.localeCompare(right.filename));
 }
@@ -66,7 +83,7 @@ function verifyMigrationHistory(files, applied) {
     if (!file) {
       throw new Error(`Applied migration file is missing: ${filename}`);
     }
-    if (file.checksum !== record.checksum) {
+    if (!file.acceptedChecksums.has(record.checksum)) {
       throw new Error(`Applied migration was modified: ${filename}`);
     }
   }
@@ -158,7 +175,11 @@ async function run() {
   }
 }
 
-run().catch((error) => {
-  console.error(`Migration failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  run().catch((error) => {
+    console.error(`Migration failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { getMigrationChecksums, run };

@@ -35,7 +35,7 @@ The live database must not be replaced with a local SQL export. Deploy only incr
 
 8. Restart the backend only after the migration succeeds.
 
-The runner creates a `schema_migrations` table, records the filename and SHA-256 checksum, and applies each migration once. An advisory lock prevents two deployments from migrating simultaneously. A changed or missing applied migration causes deployment to stop.
+The runner creates a `schema_migrations` table, records the filename and SHA-256 checksum, and applies each migration once. Checksums normalize CRLF/LF line endings so the same migration works on Windows and Linux while real SQL changes are still rejected. An advisory lock prevents two deployments from migrating simultaneously. A changed or missing applied migration causes deployment to stop.
 
 ## Safe examples
 
