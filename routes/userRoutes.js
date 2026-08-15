@@ -9,25 +9,43 @@ const {
   updateUser,
   setUserStatus,
 } = require("../controllers/userController");
+const {
+  getUserPermissions,
+  updateUserPermissions,
+} = require("../controllers/permissionController");
 
 router.get(
   "/",
   authMiddleware,
-  roleMiddleware(["admin", "plant_manager", "superadmin"]),
+  roleMiddleware(["admin", "plant_manager", "superadmin"], "users.view"),
   getUsers,
+);
+
+router.get(
+  "/:id/permissions",
+  authMiddleware,
+  roleMiddleware(["superadmin"]),
+  getUserPermissions,
+);
+
+router.put(
+  "/:id/permissions",
+  authMiddleware,
+  roleMiddleware(["superadmin"]),
+  updateUserPermissions,
 );
 
 router.put(
   "/:id",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "users.manage"),
   updateUser,
 );
 
 router.patch(
   "/:id/status",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "users.manage"),
   setUserStatus,
 );
 

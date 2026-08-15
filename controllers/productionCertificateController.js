@@ -283,6 +283,12 @@ const createCertificate = async (req, res) => {
       });
     }
 
+    req.app.get("io")?.emit("certificate_updated", {
+      action: "created",
+      certificate_id: insertId,
+      planning_id: Number(planning_id),
+    });
+
     return res.status(201).json({
       success: true,
       message: "Certificate created successfully",

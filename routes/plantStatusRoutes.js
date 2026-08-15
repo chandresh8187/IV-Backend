@@ -9,17 +9,22 @@ const {
   getPlantStatusHistory,
 } = require("../controllers/plantStatusController");
 
-router.get("/status", authMiddleware, getPlantStatus);
+router.get(
+  "/status",
+  authMiddleware,
+  roleMiddleware(["admin", "plant_manager", "superadmin"], "plant.view"),
+  getPlantStatus,
+);
 router.post(
   "/status",
   authMiddleware,
-  roleMiddleware(["plant_manager", "superadmin"]),
+  roleMiddleware(["plant_manager", "superadmin"], "plant.manage"),
   changePlantStatus,
 );
 router.get(
   "/history",
   authMiddleware,
-  roleMiddleware(["plant_manager", "superadmin", "admin"]),
+  roleMiddleware(["plant_manager", "superadmin", "admin"], "plant.view"),
   getPlantStatusHistory,
 );
 

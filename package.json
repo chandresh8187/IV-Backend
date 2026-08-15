@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js",
+    "start": "npm run migrate && npm run start:server",
+    "start:server": "node server.js",
     "migrate": "node scripts/migrate.js up",
     "migrate:status": "node scripts/migrate.js status",
     "migrate:dry-run": "node scripts/migrate.js up --dry-run",

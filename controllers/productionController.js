@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { hasPermission } = require("../services/permissionService");
 const { ensureAutomaticShift } = require("../services/automaticShiftService");
 const { getPlantStatusRow } = require("./plantStatusController");
 const {
@@ -195,20 +196,27 @@ const saveProductionEntry = async (req, res) => {
       [activeShift.id, serialNumber],
     );
 
-    const existingRow = existingRows.length > 0 ? existingRows[0] : null;
+    // A queued offline entry is always a new entry. Its provisional SR may
+    // have been taken by another user before reconnecting, so it must never
+    // be treated as an edit of that newer row.
+    const existingRow = hasOfflineShift
+      ? null
+      : existingRows.length > 0
+      ? existingRows[0]
+      : null;
     let activeEditGrantId = null;
 
-    if (!existingRow && req.user.role === "admin") {
-      return res.status(403).json({
-        success: false,
-        code: "CREATE_PRODUCTION_FORBIDDEN",
-        message: "Admins can edit only an SR row unlocked for them by a superadmin",
-      });
-    }
+    const canManageAllProduction = existingRow
+      ? await hasPermission({
+          userId: req.user.id,
+          role: req.user.role,
+          permissionKey: "production.manage_all",
+        })
+      : false;
 
-    // Every non-superadmin account needs the one-time row grant before it can
-    // update an existing entry. The grant is consumed after a successful save.
-    if (existingRow && req.user.role !== "superadmin") {
+    // An account without full production management needs a one-time row grant
+    // before it can update an existing entry. The grant is consumed on save.
+    if (existingRow && !canManageAllProduction) {
       const [grantRows] = await db.query(
         `SELECT id FROM production_edit_grants
          WHERE production_entry_id = ? AND user_id = ?
@@ -253,6 +261,13 @@ const saveProductionEntry = async (req, res) => {
       const connection = await db.getConnection();
       try {
         await connection.beginTransaction();
+
+        // Serialize SR allocation for the shift. Offline entries from
+        // different plannings can reconnect together and must receive unique,
+        // sequential SR numbers.
+        await connection.query("SELECT id FROM shifts WHERE id = ? FOR UPDATE", [
+          activeShift.id,
+        ]);
 
         const [planningRows] = await connection.query(
           `SELECT * FROM production_planning WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
@@ -857,6 +872,11 @@ const getProductions = async (req, res) => {
       Math.max(1, Number.parseInt(limit, 10) || 50),
     );
     const offset = (safePage - 1) * safeLimit;
+    const canManageEveryRow = await hasPermission({
+      userId: req.user.id,
+      role: req.user.role,
+      permissionKey: "production.manage_all",
+    });
 
     let query = `
       SELECT 
@@ -864,7 +884,7 @@ const getProductions = async (req, res) => {
         creator.name AS created_by_name,
         updater.name AS updated_by_name,
         CASE
-          WHEN ? = 'superadmin' THEN 1
+          WHEN ? = 1 THEN 1
           WHEN EXISTS (
             SELECT 1 FROM production_edit_grants peg
             WHERE peg.production_entry_id = production_entries.id
@@ -883,7 +903,7 @@ const getProductions = async (req, res) => {
       WHERE 1 = 1
     `;
 
-    const params = [req.user.role, req.user.id];
+    const params = [canManageEveryRow ? 1 : 0, req.user.id];
 
     if (shift_date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(shift_date))) {
@@ -1199,6 +1219,10 @@ const setProductionPreference = async (req, res) => {
     `INSERT INTO user_production_preferences (user_id, default_planning_id) VALUES (?, ?)
      ON DUPLICATE KEY UPDATE default_planning_id=VALUES(default_planning_id), updated_at=CURRENT_TIMESTAMP`,
     [req.user.id, planningId],
+  );
+  req.app.get("io")?.to(`user:${req.user.id}`).emit(
+    "production_preference_updated",
+    { user_id: req.user.id, default_planning_id: planningId },
   );
   return res.json({ success: true, message: planningId ? "Default challan saved" : "Default challan removed" });
 };

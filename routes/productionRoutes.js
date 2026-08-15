@@ -18,40 +18,50 @@ const {
 router.post(
   "/save",
   authMiddleware,
-  roleMiddleware(["supervisor", "admin", "plant_manager", "superadmin"]),
+  roleMiddleware(["supervisor", "admin", "plant_manager", "superadmin"], "production.save"),
   saveProductionEntry,
 );
 
-router.get("/", authMiddleware, getProductions);
+router.get(
+  "/",
+  authMiddleware,
+  roleMiddleware(["supervisor", "admin", "plant_manager", "superadmin"], "production.view"),
+  getProductions,
+);
 
 router.get("/preferences/default-challan", authMiddleware, getProductionPreference);
 router.put(
   "/preferences/default-challan",
   authMiddleware,
-  roleMiddleware(["supervisor"]),
+  roleMiddleware(["supervisor"], "production.save"),
   setProductionPreference,
 );
 
 router.post(
   "/:id/edit-grant",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "production.grant_edit"),
   grantProductionEdit,
 );
 
 router.put(
   "/:id",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "production.manage_all"),
   updateProductionById,
 );
 
-router.get("/:id", authMiddleware, getProductionById);
+router.get(
+  "/:id",
+  authMiddleware,
+  roleMiddleware(["supervisor", "admin", "plant_manager", "superadmin"], "production.view"),
+  getProductionById,
+);
 
 router.delete(
   "/:id",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "production.manage_all"),
   deleteProduction,
 );
 

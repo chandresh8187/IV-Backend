@@ -118,6 +118,9 @@ app.set("io", io);
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
+  // Keep global events working during a rolling mobile-app deployment. New
+  // clients authenticate and join a user room; older builds can temporarily
+  // remain connected but cannot receive user-targeted events.
   if (!token) return next();
 
   try {
@@ -125,15 +128,28 @@ io.use((socket, next) => {
       issuer: "iv-api",
       audience: "iv-app",
     });
-    return next();
   } catch {
     return next(new Error("Invalid socket authentication"));
   }
+
+  db.query(
+    "SELECT id FROM users WHERE id = ? AND status = 'active' LIMIT 1",
+    [socket.user.id],
+  )
+    .then(([users]) =>
+      users.length
+        ? next()
+        : next(new Error("Socket user is not active")),
+    )
+    .catch(() => next(new Error("Socket authentication unavailable")));
 });
 
 io.on("connection", (socket) => {
   if (socket.user?.id) socket.join(`user:${socket.user.id}`);
-  socket.emit("socket_connected", { success: true });
+  socket.emit("socket_connected", {
+    success: true,
+    user_id: socket.user?.id || null,
+  });
 });
 
 app.use("/api/auth", require("./routes/authRoutes"));

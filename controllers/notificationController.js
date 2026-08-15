@@ -34,6 +34,11 @@ const saveFcmToken = async (req, res) => {
       [req.user.id, fcmToken, deviceType],
     );
 
+    req.app.get("io")?.emit("users_updated", {
+      action: "notification_token_saved",
+      user_id: req.user.id,
+    });
+
     return res.json({
       success: true,
       message: "FCM token saved successfully",
@@ -65,6 +70,11 @@ const removeFcmToken = async (req, res) => {
       `,
       [req.user.id, fcmToken],
     );
+
+    req.app.get("io")?.emit("users_updated", {
+      action: "notification_token_removed",
+      user_id: req.user.id,
+    });
 
     return res.json({
       success: true,

@@ -12,7 +12,10 @@ const {
 
 const router = express.Router();
 
-const superadminOnly = [authMiddleware, roleMiddleware(["superadmin"])];
+const superadminOnly = [
+  authMiddleware,
+  roleMiddleware(["superadmin"], "settings.manage"),
+];
 
 router.get("/audit/logs", ...superadminOnly, getAuditLogs);
 

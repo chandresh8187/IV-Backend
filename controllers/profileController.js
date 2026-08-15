@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const db = require("../config/db");
+const { getUserAccess } = require("../services/permissionService");
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,6 +23,11 @@ const publicUserSelect = `
   WHERE id = ?
   LIMIT 1
 `;
+
+const withPermissions = async (user) => {
+  const access = await getUserAccess({ userId: user.id, role: user.role });
+  return { ...user, permissions: access.allowedKeys };
+};
 
 const addAuditLog = async ({ actorId, action, metadata, ipAddress }) => {
   await db.query(
@@ -55,9 +61,11 @@ const getMyProfile = async (req, res) => {
       });
     }
 
+    const user = await withPermissions(rows[0]);
+
     return res.json({
       success: true,
-      data: rows[0],
+      data: user,
     });
   } catch (error) {
     console.error("getMyProfile:", error);
@@ -165,14 +173,16 @@ const updateMyProfile = async (req, res) => {
 
     const [updatedRows] = await db.query(publicUserSelect, [req.user.id]);
 
+    const updatedUser = await withPermissions(updatedRows[0]);
+
     req.app.get("io")?.to(`user:${req.user.id}`).emit("profile_updated", {
-      user: updatedRows[0],
+      user: updatedUser,
     });
 
     return res.json({
       success: true,
       message: "Profile updated successfully",
-      data: updatedRows[0],
+      data: updatedUser,
     });
   } catch (error) {
     console.error("updateMyProfile:", error);

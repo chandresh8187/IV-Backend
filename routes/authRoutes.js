@@ -1,6 +1,6 @@
 const express = require("express");
 
-const { loginUser, registerUser } = require("../controllers/authController");
+const { loginUser, registerUser, getMyAccess } = require("../controllers/authController");
 const {
   getMyProfile,
   updateMyProfile,
@@ -16,9 +16,11 @@ router.post("/login", loginUser);
 router.post(
   "/register",
   authMiddleware,
-  roleMiddleware(["superadmin"]),
+  roleMiddleware(["superadmin"], "users.manage"),
   registerUser,
 );
+
+router.get("/access", authMiddleware, getMyAccess);
 
 // Every authenticated role can manage its own profile.
 router.get("/profile", authMiddleware, getMyProfile);

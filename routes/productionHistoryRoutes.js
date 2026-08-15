@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
+const roleMiddleware = require("../middleware/roleMiddleware");
 const { generateProductionReport } = require("../controllers/productionReportController");
 
 const {
@@ -12,19 +13,25 @@ const {
   getHistoryPlanningSummary,
 } = require("../controllers/productionHistoryController");
 
-router.get("/dates", authMiddleware, getHistoryDates);
+const historyViewAccess = roleMiddleware(
+  ["supervisor", "admin", "plant_manager", "superadmin"],
+  "history.view",
+);
 
-router.get("/date-summary", authMiddleware, getHistoryDateSummary);
+router.get("/dates", authMiddleware, historyViewAccess, getHistoryDates);
 
-router.get("/shift-table", authMiddleware, getHistoryShiftTable);
+router.get("/date-summary", authMiddleware, historyViewAccess, getHistoryDateSummary);
 
-router.get("/material-summary", authMiddleware, getHistoryMaterialSummary);
+router.get("/shift-table", authMiddleware, historyViewAccess, getHistoryShiftTable);
 
-router.get("/planning-summary", authMiddleware, getHistoryPlanningSummary);
+router.get("/material-summary", authMiddleware, historyViewAccess, getHistoryMaterialSummary);
+
+router.get("/planning-summary", authMiddleware, historyViewAccess, getHistoryPlanningSummary);
 
 router.get(
   "/report",
   authMiddleware,
+  roleMiddleware(["superadmin"], "reports.generate"),
   generateProductionReport,
 );
 

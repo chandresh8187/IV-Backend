@@ -12,14 +12,14 @@ const {
 router.get(
   "/",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin", "plant_manager"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"], "users.view"),
   getSupervisors,
 );
 
 router.get(
   "/active",
   authMiddleware,
-  roleMiddleware(["admin", "superadmin", "plant_manager"]),
+  roleMiddleware(["admin", "superadmin", "plant_manager"], "users.view"),
   getActiveSupervisors,
 );
 

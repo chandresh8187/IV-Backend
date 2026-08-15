@@ -12,15 +12,20 @@ const publishOnce = async ({ type, referenceKey, title, body, data, io }) => {
 
   if (!claim.affectedRows) return;
 
+  const notificationData = {
+    ...data,
+    notification_key: referenceKey,
+  };
+
+  io?.emit(type, { ...notificationData, title, body });
+
   try {
     const response = await sendNotificationToRoles({
       roles: ["superadmin", "admin", "supervisor", "plant_manager"],
       title,
       body,
-      data,
+      data: notificationData,
     });
-
-    io?.emit(type, { ...data, title, body });
 
     if (!response?.successCount) {
       await db.query(
@@ -44,57 +49,35 @@ const calculateZincPercentage = (msWeight, giWeight) => {
   return ms > 0 ? Number((((gi - ms) / ms) * 100).toFixed(2)) : 0;
 };
 
-const checkPlanningZincNotification = async ({ planningId, io }) => {
-  if (!planningId) return;
+const hasReachedZincTarget = (zinc, target) =>
+  Number.isFinite(zinc) &&
+  Number.isFinite(target) &&
+  target > 0 &&
+  zinc >= target;
 
-  const [rows] = await db.query(
-    `SELECT pp.id,
-            pp.challan_no,
-            pp.target_zinc_percentage,
-            COALESCE(SUM(
-              CASE
-                WHEN pe.ms_weight > 0 AND pe.gi_weight > 0
-                THEN pe.ms_weight * COALESCE(pe.dipping_qty, 0)
-                ELSE 0
-              END
-            ), 0) AS total_ms,
-            COALESCE(SUM(
-              CASE
-                WHEN pe.ms_weight > 0 AND pe.gi_weight > 0
-                THEN pe.gi_weight * COALESCE(pe.dipping_qty, 0)
-                ELSE 0
-              END
-            ), 0) AS total_gi
-     FROM production_planning pp
-     LEFT JOIN production_entries pe
-       ON pe.planning_id = pp.id
-      AND COALESCE(pe.row_type, 'entry') = 'entry'
-     WHERE pp.id = ? AND pp.deleted_at IS NULL
-     GROUP BY pp.id, pp.challan_no, pp.target_zinc_percentage
-     LIMIT 1`,
-    [planningId],
-  );
+const publishPlanningEntryAlert = async ({ entry, io }) => {
+  const target = Number(entry.target_zinc_percentage);
+  const storedZinc =
+    entry.zinc_percentage == null || entry.zinc_percentage === ""
+      ? null
+      : Number(entry.zinc_percentage);
+  const zinc = Number.isFinite(storedZinc)
+    ? storedZinc
+    : calculateZincPercentage(entry.ms_weight, entry.gi_weight);
 
-  if (!rows.length) return;
-
-  const planning = rows[0];
-  const target = Number(planning.target_zinc_percentage);
-
-  if (!Number.isFinite(target) || target <= 0) return;
-
-  const zinc = calculateZincPercentage(planning.total_ms, planning.total_gi);
-
-  if (zinc <= target) return;
+  if (!hasReachedZincTarget(zinc, target)) return;
 
   await publishOnce({
     type: "planning_zinc_alert",
-    referenceKey: `planning_${planning.id}_target_${target}`,
-    title: "Planning Zinc Target Exceeded",
-    body: `Challan ${planning.challan_no || "-"} cumulative zinc consumption is ${zinc}% (target ${target}%)`,
+    referenceKey: `entry_${entry.id}_planning_${entry.planning_id}_target_${target}`,
+    title: "Production Zinc Target Reached",
+    body: `Challan ${entry.challan_no || "-"}, SR ${entry.sr_no || "-"} zinc consumption is ${zinc}% (target ${target}%)`,
     data: {
       type: "planning_zinc_alert",
-      planning_id: String(planning.id),
-      challan_no: String(planning.challan_no || ""),
+      production_entry_id: String(entry.id),
+      planning_id: String(entry.planning_id),
+      challan_no: String(entry.challan_no || ""),
+      sr_no: String(entry.sr_no || ""),
       zinc_consumption: String(zinc),
       threshold: String(target),
     },
@@ -102,11 +85,54 @@ const checkPlanningZincNotification = async ({ planningId, io }) => {
   });
 };
 
+const checkPlanningZincNotification = async ({ planningId, io }) => {
+  if (!planningId) return;
+
+  const [rows] = await db.query(
+    `SELECT pe.id,
+            pe.planning_id,
+            pe.sr_no,
+            pe.challan_no,
+            pe.ms_weight,
+            pe.gi_weight,
+            pe.zinc_percentage,
+            pp.target_zinc_percentage
+     FROM production_entries pe
+     INNER JOIN production_planning pp
+       ON pp.id = pe.planning_id
+      AND pp.deleted_at IS NULL
+     WHERE pe.planning_id = ?
+       AND COALESCE(pe.row_type, 'entry') = 'entry'
+       AND pp.target_zinc_percentage > 0
+       AND COALESCE(
+         pe.zinc_percentage,
+         ROUND(((pe.gi_weight - pe.ms_weight) / NULLIF(pe.ms_weight, 0)) * 100, 2)
+       ) >= pp.target_zinc_percentage
+     ORDER BY pe.id DESC
+     LIMIT 1`,
+    [planningId],
+  );
+
+  if (!rows.length) return;
+  await publishPlanningEntryAlert({ entry: rows[0], io });
+};
+
 const checkEntryZincNotification = async ({ entryId, io }) => {
   const [rows] = await db.query(
-    `SELECT id, planning_id, shift_date
-     FROM production_entries
-     WHERE id = ? LIMIT 1`,
+    `SELECT pe.id,
+            pe.planning_id,
+            pe.sr_no,
+            pe.challan_no,
+            pe.shift_date,
+            pe.ms_weight,
+            pe.gi_weight,
+            pe.zinc_percentage,
+            pp.target_zinc_percentage
+     FROM production_entries pe
+     LEFT JOIN production_planning pp
+       ON pp.id = pe.planning_id
+      AND pp.deleted_at IS NULL
+     WHERE pe.id = ? LIMIT 1`,
     [entryId],
   );
 
@@ -114,10 +140,9 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
 
   const entry = rows[0];
 
-  await checkPlanningZincNotification({
-    planningId: entry.planning_id,
-    io,
-  });
+  if (entry.planning_id) {
+    await publishPlanningEntryAlert({ entry, io });
+  }
 
   const setting = await getSetting("zinc_alert_threshold");
   const monthlyTarget = Number(setting.percentage);
@@ -152,7 +177,7 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
     totals[0].total_gi,
   );
 
-  if (monthlyZinc <= monthlyTarget) return;
+  if (!hasReachedZincTarget(monthlyZinc, monthlyTarget)) return;
 
   await publishOnce({
     type: "monthly_zinc_alert",
@@ -170,6 +195,8 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
 };
 
 module.exports = {
+  calculateZincPercentage,
   checkEntryZincNotification,
   checkPlanningZincNotification,
+  hasReachedZincTarget,
 };

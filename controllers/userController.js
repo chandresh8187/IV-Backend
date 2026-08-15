@@ -1,22 +1,21 @@
 const db = require("../config/db");
+const { hasPermission } = require("../services/permissionService");
 
 const getUsers = async (req, res) => {
   try {
     let where = "";
 
-    if (req.user.role === "superadmin") {
+    const canManageUsers = await hasPermission({
+      userId: req.user.id,
+      role: req.user.role,
+      permissionKey: "users.manage",
+    });
+
+    if (req.user.role === "superadmin" || canManageUsers) {
       where =
         "WHERE users.role IN ('superadmin', 'plant_manager', 'admin', 'supervisor')";
-    } else if (
-      req.user.role === "admin" ||
-      req.user.role === "plant_manager"
-    ) {
-      where = "WHERE users.role = 'supervisor'";
     } else {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied",
-      });
+      where = "WHERE users.role = 'supervisor'";
     }
 
     const [rows] = await db.query(
@@ -29,6 +28,14 @@ const getUsers = async (req, res) => {
         users.assigned_shift,
         users.status,
         users.created_at,
+
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM user_fcm_tokens
+            WHERE user_fcm_tokens.user_id = users.id
+          ) THEN 1
+          ELSE 0
+        END AS notifications_registered,
 
         shifts.id AS active_shift_id,
         shifts.shift_name AS active_shift_name,
