@@ -87,7 +87,12 @@ const sendToTokens = async ({ tokens, title, body, data = {} }) => {
       data: stringData,
       android: {
         priority: "high",
-        notification: { sound: "default" },
+        notification: {
+          channelId: "iv_production_alerts",
+          priority: "high",
+          sound: "default",
+          defaultVibrateTimings: true,
+        },
       },
     });
 
@@ -202,13 +207,17 @@ const sendNotificationToUser = async ({ userId, title, body, data = {} }) => {
   );
 
   const tokens = rows.map((row) => row.fcm_token).filter(Boolean);
-
-  return sendToTokens({
+  const delivery = await sendToTokens({
     tokens,
     title,
     body,
     data,
   });
+
+  return {
+    ...delivery,
+    tokenCount: new Set(tokens).size,
+  };
 };
 
 module.exports = {

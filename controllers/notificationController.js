@@ -1,5 +1,8 @@
 const db = require("../config/db");
-const { sendNotificationToRoles } = require("../utils/sendNotification");
+const {
+  sendNotificationToRoles,
+  sendNotificationToUser,
+} = require("../utils/sendNotification");
 const {
   checkEntryZincNotification,
 } = require("../utils/checkEntryZincNotification");
@@ -38,9 +41,18 @@ const saveFcmToken = async (req, res) => {
       [req.user.id, fcmToken, deviceType],
     );
 
+    const [[registration]] = await db.query(
+      `SELECT COUNT(*) AS device_count
+       FROM user_fcm_tokens
+       WHERE user_id = ?`,
+      [req.user.id],
+    );
+
     console.info("FCM token registered:", {
       user_id: req.user.id,
       device_type: deviceType,
+      token_suffix: fcmToken.slice(-8),
+      device_count: Number(registration?.device_count) || 0,
     });
 
     req.app.get("io")?.emit("users_updated", {
@@ -55,6 +67,7 @@ const saveFcmToken = async (req, res) => {
         registered: true,
         device_type: deviceType,
         token_suffix: fcmToken.slice(-8),
+        device_count: Number(registration?.device_count) || 0,
       },
     });
   } catch (error) {
@@ -105,6 +118,83 @@ const removeFcmToken = async (req, res) => {
       message: "Server error",
     });
   }
+};
+
+const getMyNotificationStatus = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id,
+              device_type,
+              RIGHT(fcm_token, 8) AS token_suffix,
+              created_at,
+              updated_at
+       FROM user_fcm_tokens
+       WHERE user_id = ?
+       ORDER BY updated_at DESC, id DESC`,
+      [req.user.id],
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        registered: rows.length > 0,
+        device_count: rows.length,
+        devices: rows,
+      },
+    });
+  } catch (error) {
+    console.error("Notification registration status failed:", {
+      user_id: req.user?.id,
+      code: error?.code,
+      message: error?.message,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Could not load notification device status",
+    });
+  }
+};
+
+const scheduleMyBackgroundTest = async (req, res) => {
+  if (String(req.user.role || "").toLowerCase().trim() === "supervisor") {
+    return res.status(403).json({
+      success: false,
+      message: "Supervisors are excluded from notifications",
+    });
+  }
+
+  const userId = req.user.id;
+  const notificationKey = `background_test_${userId}_${Date.now()}`;
+
+  setTimeout(() => {
+    sendNotificationToUser({
+      userId,
+      title: "IV Background Notification Test",
+      body: "Background FCM and Android notification-panel delivery are working.",
+      data: {
+        type: "notification_test",
+        notification_key: notificationKey,
+      },
+    })
+      .then((delivery) =>
+        console.info("Background FCM test delivery:", {
+          user_id: userId,
+          ...delivery,
+        }),
+      )
+      .catch((error) =>
+        console.error("Background FCM test failed:", {
+          user_id: userId,
+          code: error?.code,
+          message: error?.message,
+        }),
+      );
+  }, 8000);
+
+  return res.json({
+    success: true,
+    message: "Background notification scheduled in 8 seconds",
+  });
 };
 
 const sendTestNotification = async (req, res) => {
@@ -223,6 +313,8 @@ const testLatestProductionZinc = async (req, res) => {
 module.exports = {
   saveFcmToken,
   removeFcmToken,
+  getMyNotificationStatus,
+  scheduleMyBackgroundTest,
   sendTestNotification,
   testLatestProductionZinc,
 };
