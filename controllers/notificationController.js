@@ -7,9 +7,15 @@ const {
   checkEntryZincNotification,
 } = require("../utils/checkEntryZincNotification");
 
+const normalizeInstallationId = (value) => String(value || "").trim();
+const isValidInstallationId = (value) =>
+  /^[a-zA-Z0-9._:-]{16,100}$/.test(value);
+
 const saveFcmToken = async (req, res) => {
+  let connection;
   try {
     const fcmToken = String(req.body.fcm_token || "").trim();
+    const installationId = normalizeInstallationId(req.body.installation_id);
     const deviceType = String(req.body.device_type || "android")
       .trim()
       .toLowerCase();
@@ -28,29 +34,102 @@ const saveFcmToken = async (req, res) => {
       });
     }
 
-    await db.query(
-      `
-      INSERT INTO user_fcm_tokens
-      (user_id, fcm_token, device_type)
-      VALUES (?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        user_id = VALUES(user_id),
-        device_type = VALUES(device_type),
-        updated_at = CURRENT_TIMESTAMP
-      `,
-      [req.user.id, fcmToken, deviceType],
-    );
+    if (installationId && !isValidInstallationId(installationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid installation_id is required",
+      });
+    }
 
-    const [[registration]] = await db.query(
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    let installationRow = null;
+    if (installationId) {
+      const [installationRows] = await connection.query(
+        `SELECT id, user_id, fcm_token, installation_id
+         FROM user_fcm_tokens
+         WHERE installation_id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [installationId],
+      );
+      installationRow = installationRows[0] || null;
+    }
+
+    const [tokenRows] = await connection.query(
+      `SELECT id, user_id, fcm_token, installation_id
+       FROM user_fcm_tokens
+       WHERE fcm_token = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [fcmToken],
+    );
+    const tokenRow = tokenRows[0] || null;
+
+    if (installationRow && tokenRow && installationRow.id !== tokenRow.id) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        code: "FCM_TOKEN_DEVICE_CONFLICT",
+        message: "This Firebase token belongs to another app installation",
+      });
+    }
+
+    if (installationRow) {
+      await connection.query(
+        `UPDATE user_fcm_tokens
+         SET user_id = ?,
+             fcm_token = ?,
+             device_type = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [req.user.id, fcmToken, deviceType, installationRow.id],
+      );
+    } else if (tokenRow) {
+      if (
+        installationId &&
+        tokenRow.installation_id &&
+        tokenRow.installation_id !== installationId
+      ) {
+        await connection.rollback();
+        return res.status(409).json({
+          success: false,
+          code: "FCM_TOKEN_DEVICE_CONFLICT",
+          message: "This Firebase token belongs to another app installation",
+        });
+      }
+
+      await connection.query(
+        `UPDATE user_fcm_tokens
+         SET user_id = ?,
+             installation_id = COALESCE(installation_id, ?),
+             device_type = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [req.user.id, installationId || null, deviceType, tokenRow.id],
+      );
+    } else {
+      await connection.query(
+        `INSERT INTO user_fcm_tokens
+         (user_id, installation_id, fcm_token, device_type)
+         VALUES (?, ?, ?, ?)`,
+        [req.user.id, installationId || null, fcmToken, deviceType],
+      );
+    }
+
+    const [[registration]] = await connection.query(
       `SELECT COUNT(*) AS device_count
        FROM user_fcm_tokens
        WHERE user_id = ?`,
       [req.user.id],
     );
+    await connection.commit();
 
     console.info("FCM token registered:", {
       user_id: req.user.id,
       device_type: deviceType,
+      installation_suffix: installationId.slice(-8) || null,
       token_suffix: fcmToken.slice(-8),
       device_count: Number(registration?.device_count) || 0,
     });
@@ -66,11 +145,13 @@ const saveFcmToken = async (req, res) => {
       data: {
         registered: true,
         device_type: deviceType,
+        installation_suffix: installationId.slice(-8) || null,
         token_suffix: fcmToken.slice(-8),
         device_count: Number(registration?.device_count) || 0,
       },
     });
   } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
     console.error("FCM token registration failed:", {
       user_id: req.user?.id,
       code: error?.code,
@@ -80,28 +161,45 @@ const saveFcmToken = async (req, res) => {
       success: false,
       message: "Could not save this device notification token",
     });
+  } finally {
+    connection?.release();
   }
 };
 
 const removeFcmToken = async (req, res) => {
   try {
     const fcmToken = String(req.body.fcm_token || "").trim();
+    const installationId = normalizeInstallationId(req.body.installation_id);
 
-    if (!fcmToken) {
+    if (!fcmToken && !installationId) {
       return res.status(400).json({
         success: false,
-        message: "fcm_token is required",
+        message: "fcm_token or installation_id is required",
       });
     }
 
-    await db.query(
-      `
-      DELETE FROM user_fcm_tokens
-      WHERE user_id = ?
-      AND fcm_token = ?
-      `,
-      [req.user.id, fcmToken],
-    );
+    if (installationId && !isValidInstallationId(installationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid installation_id is required",
+      });
+    }
+
+    if (installationId) {
+      await db.query(
+        `DELETE FROM user_fcm_tokens
+         WHERE user_id = ?
+           AND installation_id = ?`,
+        [req.user.id, installationId],
+      );
+    } else {
+      await db.query(
+        `DELETE FROM user_fcm_tokens
+         WHERE user_id = ?
+           AND fcm_token = ?`,
+        [req.user.id, fcmToken],
+      );
+    }
 
     req.app.get("io")?.emit("users_updated", {
       action: "notification_token_removed",
@@ -123,6 +221,7 @@ const removeFcmToken = async (req, res) => {
 const checkFcmToken = async (req, res) => {
   try {
     const fcmToken = String(req.body.fcm_token || "").trim();
+    const installationId = normalizeInstallationId(req.body.installation_id);
 
     if (fcmToken.length < 20 || fcmToken.length > 512) {
       return res.status(400).json({
@@ -131,16 +230,25 @@ const checkFcmToken = async (req, res) => {
       });
     }
 
+    if (installationId && !isValidInstallationId(installationId)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid installation_id is required",
+      });
+    }
+
     const [rows] = await db.query(
-      `SELECT user_id
+      `SELECT user_id, fcm_token, installation_id
        FROM user_fcm_tokens
-       WHERE fcm_token = ?
+       WHERE ${installationId ? "installation_id = ?" : "fcm_token = ?"}
        LIMIT 1`,
-      [fcmToken],
+      [installationId || fcmToken],
     );
 
     const registeredForCurrentUser =
-      rows.length > 0 && Number(rows[0].user_id) === Number(req.user.id);
+      rows.length > 0 &&
+      Number(rows[0].user_id) === Number(req.user.id) &&
+      rows[0].fcm_token === fcmToken;
 
     return res.json({
       success: true,
@@ -149,7 +257,9 @@ const checkFcmToken = async (req, res) => {
         reason: registeredForCurrentUser
           ? "REGISTERED"
           : rows.length
-            ? "REGISTERED_TO_ANOTHER_USER"
+            ? Number(rows[0].user_id) !== Number(req.user.id)
+              ? "DEVICE_REGISTERED_TO_ANOTHER_USER"
+              : "DEVICE_TOKEN_CHANGED"
             : "NOT_REGISTERED",
       },
     });
@@ -171,6 +281,7 @@ const getMyNotificationStatus = async (req, res) => {
     const [rows] = await db.query(
       `SELECT id,
               device_type,
+              RIGHT(installation_id, 8) AS installation_suffix,
               RIGHT(fcm_token, 8) AS token_suffix,
               created_at,
               updated_at
