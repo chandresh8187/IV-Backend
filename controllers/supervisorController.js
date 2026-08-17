@@ -1,7 +1,10 @@
 const db = require("../config/db");
+const { ensureAutomaticShift } = require("../services/automaticShiftService");
 
 const getSupervisors = async (req, res) => {
   try {
+    await ensureAutomaticShift();
+
     const [rows] = await db.query(`
       SELECT
         users.id AS supervisor_id,
@@ -22,8 +25,12 @@ const getSupervisors = async (req, res) => {
 
       FROM users
       LEFT JOIN shifts
-        ON shifts.started_by = users.id
-        AND shifts.status = 'active'
+        ON shifts.status = 'active'
+        AND users.status = 'active'
+        AND (
+          LOWER(users.assigned_shift) = LOWER(shifts.shift_name)
+          OR LOWER(users.assigned_shift) = 'both'
+        )
 
       WHERE users.role = 'supervisor'
       ORDER BY users.name ASC
@@ -44,6 +51,8 @@ const getSupervisors = async (req, res) => {
 
 const getActiveSupervisors = async (req, res) => {
   try {
+    await ensureAutomaticShift();
+
     const [rows] = await db.query(`
       SELECT
         shifts.id AS shift_id,
@@ -57,9 +66,14 @@ const getActiveSupervisors = async (req, res) => {
         users.email AS supervisor_email,
         users.assigned_shift
       FROM shifts
-      LEFT JOIN users ON users.id = shifts.started_by
+      INNER JOIN users
+        ON users.role = 'supervisor'
+        AND users.status = 'active'
+        AND (
+          LOWER(users.assigned_shift) = LOWER(shifts.shift_name)
+          OR LOWER(users.assigned_shift) = 'both'
+        )
       WHERE shifts.status = 'active'
-      AND users.id IS NOT NULL
       ORDER BY shifts.start_time DESC
     `);
 

@@ -1,9 +1,12 @@
 const db = require("../config/db");
 const { hasPermission } = require("../services/permissionService");
+const { ensureAutomaticShift } = require("../services/automaticShiftService");
 
 const getUsers = async (req, res) => {
   try {
     let where = "";
+
+    await ensureAutomaticShift();
 
     const canManageUsers = await hasPermission({
       userId: req.user.id,
@@ -50,8 +53,13 @@ const getUsers = async (req, res) => {
       FROM users
 
       LEFT JOIN shifts
-        ON shifts.started_by = users.id
-        AND shifts.status = 'active'
+        ON shifts.status = 'active'
+        AND users.role = 'supervisor'
+        AND users.status = 'active'
+        AND (
+          LOWER(users.assigned_shift) = LOWER(shifts.shift_name)
+          OR LOWER(users.assigned_shift) = 'both'
+        )
 
       ${where}
 

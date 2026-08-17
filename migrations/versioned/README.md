@@ -10,4 +10,8 @@ npm run migration:create -- add_feature_column
 
 Each file must contain exactly one additive SQL statement. The runner rejects `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, `REPLACE`, table renames, column `CHANGE`/`MODIFY`, disabled foreign-key checks, and bulk data loading.
 
+The only destructive exception is the one-time, exact removal of
+`users.fcm_token` after its values are backfilled into `user_fcm_tokens`.
+All notification token writes and reads use the multi-device table.
+
 For a populated table, add a nullable column or provide a safe default. Never edit or delete a migration after it has been applied; add another migration instead.

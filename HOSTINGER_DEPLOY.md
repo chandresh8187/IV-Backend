@@ -20,10 +20,13 @@ application-root/
    server. They are intentionally not included in this archive.
 2. Extract this ZIP directly into the Node.js application root. Do not leave
    the files inside an additional nested folder.
-3. Set the startup file to `server.js` and use Node.js 20 or newer.
+3. Set the startup file to `server.js` and use Node.js 20 or newer. The startup
+   file runs pending versioned migrations before opening the API port.
 4. Install dependencies with `npm install --omit=dev`.
-5. Run `npm run migrate:status`, `npm run migrate:dry-run`, and then `npm run migrate`.
-6. Restart the Node.js application from hPanel only after migrations succeed.
+5. Back up the live database. You can optionally review changes with
+   `npm run migrate:status` and `npm run migrate:dry-run`.
+6. Restart the Node.js application from hPanel. Both direct `server.js` startup
+   and `npm start` apply migrations first and stop startup if migration fails.
 
 The startup log must contain both:
 

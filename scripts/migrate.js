@@ -115,9 +115,9 @@ function showStatus(files, applied) {
   }
 }
 
-async function run() {
-  const command = process.argv[2] || "up";
-  const dryRun = process.argv.includes("--dry-run");
+async function run(options = {}) {
+  const command = options.command || process.argv[2] || "up";
+  const dryRun = options.dryRun ?? process.argv.includes("--dry-run");
   if (!new Set(["up", "status"]).has(command)) {
     throw new Error("Usage: node scripts/migrate.js [up|status] [--dry-run]");
   }

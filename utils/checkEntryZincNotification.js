@@ -2,42 +2,132 @@ const db = require("../config/db");
 const { getSetting } = require("../services/appSettingsService");
 const { sendNotificationToRoles } = require("./sendNotification");
 
-const publishOnce = async ({ type, referenceKey, title, body, data, io }) => {
-  const [claim] = await db.query(
-    `INSERT IGNORE INTO notification_logs
-     (type, reference_key, title, body)
-     VALUES (?, ?, ?, ?)`,
-    [type, referenceKey, title, body],
-  );
+const publishOnce = async ({
+  type,
+  referenceKey,
+  title,
+  body,
+  data,
+  io,
+  force = false,
+  retryIfAlreadySent = false,
+}) => {
+  let claimed = false;
+  let replaying = force;
 
-  if (!claim.affectedRows) return;
+  if (!force) {
+    try {
+      const [existingLogs] = await db.query(
+        `SELECT id FROM notification_logs
+         WHERE type = ? AND reference_key = ?
+         LIMIT 1`,
+        [type, referenceKey],
+      );
 
+      if (existingLogs.length) {
+        if (!retryIfAlreadySent) {
+          return {
+            triggered: false,
+            reason: "ALREADY_SENT",
+          };
+        }
+        replaying = true;
+      } else {
+        try {
+          await db.query(
+            `INSERT INTO notification_logs
+             (type, reference_key, title, body)
+             VALUES (?, ?, ?, ?)`,
+            [type, referenceKey, title, body],
+          );
+          claimed = true;
+        } catch (error) {
+          if (error?.code === "ER_DUP_ENTRY") {
+            const [duplicateLogs] = await db.query(
+              `SELECT id FROM notification_logs
+               WHERE type = ? AND reference_key = ?
+               LIMIT 1`,
+              [type, referenceKey],
+            );
+
+            if (duplicateLogs.length && !retryIfAlreadySent) {
+              return {
+                triggered: false,
+                reason: "ALREADY_SENT",
+              };
+            }
+            if (duplicateLogs.length) replaying = true;
+          }
+
+          if (!replaying) {
+            throw error;
+          }
+        }
+      }
+    } catch (error) {
+      // Notification logging is best-effort. An old or incompatible live
+      // table must never prevent an operational zinc alert from being sent.
+      console.error("Notification deduplication unavailable; delivering alert:", {
+        type,
+        reference_key: referenceKey,
+        error: error?.code || error?.message,
+      });
+    }
+  }
+
+  const deliveryReferenceKey = replaying
+    ? `${referenceKey}_replay_${Date.now()}`
+    : referenceKey;
   const notificationData = {
     ...data,
-    notification_key: referenceKey,
+    notification_key: deliveryReferenceKey,
   };
-
-  io?.emit(type, { ...notificationData, title, body });
 
   try {
     const response = await sendNotificationToRoles({
-      roles: ["superadmin", "admin", "supervisor", "plant_manager"],
+      roles: ["superadmin", "admin", "plant_manager"],
+      excludeRoles: ["supervisor"],
       title,
       body,
       data: notificationData,
+      io,
+      socketEvent: type,
     });
 
-    if (!response?.successCount) {
+    const delivered = Boolean(
+      response?.successCount || response?.socketConnectionCount,
+    );
+    const partialFailure = Boolean(
+      response?.failureCount || response?.pushErrorCode,
+    );
+
+    // A partially failed multicast must remain retryable. Otherwise one
+    // successful device permanently suppresses delivery to every failed one.
+    if (claimed && (!delivered || partialFailure)) {
       await db.query(
         "DELETE FROM notification_logs WHERE type = ? AND reference_key = ?",
         [type, referenceKey],
       );
     }
+
+    return {
+      triggered: delivered,
+      reason: !delivered
+        ? "NO_REACHABLE_RECIPIENTS"
+        : partialFailure
+          ? "PARTIAL_DELIVERY_RETRYABLE"
+          : replaying
+            ? "DELIVERED_REPLAY"
+            : "DELIVERED",
+      delivery: response,
+    };
   } catch (error) {
-    await db.query(
-      "DELETE FROM notification_logs WHERE type = ? AND reference_key = ?",
-      [type, referenceKey],
-    );
+    if (claimed) {
+      await db.query(
+        "DELETE FROM notification_logs WHERE type = ? AND reference_key = ?",
+        [type, referenceKey],
+      );
+    }
     throw error;
   }
 };
@@ -55,7 +145,12 @@ const hasReachedZincTarget = (zinc, target) =>
   target > 0 &&
   zinc >= target;
 
-const publishPlanningEntryAlert = async ({ entry, io }) => {
+const publishPlanningEntryAlert = async ({
+  entry,
+  io,
+  force = false,
+  retryIfAlreadySent = false,
+}) => {
   const target = Number(entry.target_zinc_percentage);
   const storedZinc =
     entry.zinc_percentage == null || entry.zinc_percentage === ""
@@ -65,9 +160,20 @@ const publishPlanningEntryAlert = async ({ entry, io }) => {
     ? storedZinc
     : calculateZincPercentage(entry.ms_weight, entry.gi_weight);
 
-  if (!hasReachedZincTarget(zinc, target)) return;
+  if (!hasReachedZincTarget(zinc, target)) {
+    return {
+      triggered: false,
+      reason: !Number.isFinite(target) || target <= 0
+        ? "TARGET_NOT_CONFIGURED"
+        : !Number.isFinite(zinc)
+          ? "ZINC_NOT_AVAILABLE"
+          : "BELOW_TARGET",
+      zinc,
+      target,
+    };
+  }
 
-  await publishOnce({
+  const result = await publishOnce({
     type: "planning_zinc_alert",
     referenceKey: `entry_${entry.id}_planning_${entry.planning_id}_target_${target}`,
     title: "Production Zinc Target Reached",
@@ -82,7 +188,11 @@ const publishPlanningEntryAlert = async ({ entry, io }) => {
       threshold: String(target),
     },
     io,
+    force,
+    retryIfAlreadySent,
   });
+
+  return { ...result, zinc, target };
 };
 
 const checkPlanningZincNotification = async ({ planningId, io }) => {
@@ -113,13 +223,24 @@ const checkPlanningZincNotification = async ({ planningId, io }) => {
     [planningId],
   );
 
-  if (!rows.length) return;
-  await publishPlanningEntryAlert({ entry: rows[0], io });
+  if (!rows.length) {
+    return { triggered: false, reason: "NO_MATCHING_ENTRY" };
+  }
+  return publishPlanningEntryAlert({ entry: rows[0], io });
 };
 
-const checkEntryZincNotification = async ({ entryId, io }) => {
-  const [rows] = await db.query(
-    `SELECT pe.id,
+const checkEntryZincNotification = async ({
+  entryId,
+  entrySnapshot,
+  io,
+  force = false,
+  retryIfAlreadySent = false,
+}) => {
+  let entry = entrySnapshot;
+
+  if (!entry) {
+    const [rows] = await db.query(
+      `SELECT pe.id,
             pe.planning_id,
             pe.sr_no,
             pe.challan_no,
@@ -133,18 +254,33 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
        ON pp.id = pe.planning_id
       AND pp.deleted_at IS NULL
      WHERE pe.id = ? LIMIT 1`,
-    [entryId],
-  );
+      [entryId],
+    );
 
-  if (!rows.length) return;
+    if (!rows.length) {
+      return { triggered: false, reason: "ENTRY_NOT_FOUND" };
+    }
 
-  const entry = rows[0];
-
-  if (entry.planning_id) {
-    await publishPlanningEntryAlert({ entry, io });
+    entry = rows[0];
   }
 
-  const setting = await getSetting("zinc_alert_threshold");
+  let planningResult = { triggered: false, reason: "PLANNING_NOT_LINKED" };
+  if (entry.planning_id) {
+    planningResult = await publishPlanningEntryAlert({
+      entry,
+      io,
+      force,
+      retryIfAlreadySent,
+    });
+  }
+
+  let setting;
+  try {
+    setting = await getSetting("zinc_alert_threshold");
+  } catch (error) {
+    console.error("Monthly zinc notification check failed:", error);
+    return planningResult;
+  }
   const monthlyTarget = Number(setting.percentage);
 
   if (
@@ -152,7 +288,7 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
     !Number.isFinite(monthlyTarget) ||
     monthlyTarget <= 0
   ) {
-    return;
+    return planningResult;
   }
 
   const month = String(entry.shift_date).slice(0, 7);
@@ -177,7 +313,9 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
     totals[0].total_gi,
   );
 
-  if (!hasReachedZincTarget(monthlyZinc, monthlyTarget)) return;
+  if (!hasReachedZincTarget(monthlyZinc, monthlyTarget)) {
+    return planningResult;
+  }
 
   await publishOnce({
     type: "monthly_zinc_alert",
@@ -192,6 +330,8 @@ const checkEntryZincNotification = async ({ entryId, io }) => {
     },
     io,
   });
+
+  return planningResult;
 };
 
 module.exports = {

@@ -6,10 +6,31 @@ const {
   checkEntryZincNotification,
 } = require("../utils/checkEntryZincNotification");
 
-const notifyZincSafely = ({ entryId, io }) => {
-  checkEntryZincNotification({ entryId, io }).catch((error) => {
+const notifyZincSafely = async ({
+  entryId,
+  entrySnapshot,
+  io,
+  retryIfAlreadySent = false,
+}) => {
+  try {
+    const result = await checkEntryZincNotification({
+      entryId,
+      entrySnapshot,
+      io,
+      retryIfAlreadySent,
+    });
+    console.info("Production zinc notification check:", {
+      entry_id: entryId,
+      ...result,
+    });
+    return result;
+  } catch (error) {
     console.error("Zinc notification failed:", error);
-  });
+    return {
+      triggered: false,
+      reason: "NOTIFICATION_CHECK_FAILED",
+    };
+  }
 };
 
 const consumeEditGrant = async (queryable, grantId) => {
@@ -459,7 +480,21 @@ const saveProductionEntry = async (req, res) => {
             sr_no: Number(sr_no),
           });
 
-          notifyZincSafely({ entryId: savedEntryId, io });
+          const zincAlert = await notifyZincSafely({
+            entryId: savedEntryId,
+            io,
+            entrySnapshot: {
+              id: savedEntryId,
+              planning_id: Number(planning_id),
+              sr_no: Number(sr_no),
+              challan_no,
+              shift_date: activeShift.shift_date,
+              ms_weight,
+              gi_weight,
+              zinc_percentage: zincPercentage,
+              target_zinc_percentage: planning.target_zinc_percentage,
+            },
+          });
 
           return res.json({
             success: true,
@@ -469,6 +504,7 @@ const saveProductionEntry = async (req, res) => {
               zinc_percentage: zincPercentage,
               production_weight: productionWeight,
               avg_coating: avgCoating,
+              zinc_alert: zincAlert,
             },
           });
         }
@@ -568,7 +604,22 @@ const saveProductionEntry = async (req, res) => {
         });
         const savedEntryId = result.insertId;
 
-        notifyZincSafely({ entryId: savedEntryId, io });
+        const zincAlert = await notifyZincSafely({
+          entryId: savedEntryId,
+          io,
+          retryIfAlreadySent: true,
+          entrySnapshot: {
+            id: savedEntryId,
+            planning_id: Number(planning_id),
+            sr_no: Number(nextSrNo),
+            challan_no,
+            shift_date: activeShift.shift_date,
+            ms_weight,
+            gi_weight,
+            zinc_percentage: zincPercentage,
+            target_zinc_percentage: planning.target_zinc_percentage,
+          },
+        });
 
         return res.status(201).json({
           success: true,
@@ -580,6 +631,7 @@ const saveProductionEntry = async (req, res) => {
             zinc_percentage: zincPercentage,
             production_weight: productionWeight,
             avg_coating: avgCoating,
+            zinc_alert: zincAlert,
           },
         });
       } catch (transactionError) {

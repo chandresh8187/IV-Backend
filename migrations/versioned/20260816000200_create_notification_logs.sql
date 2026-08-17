@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS notification_logs (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  type VARCHAR(100) NOT NULL,
+  reference_key VARCHAR(191) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_notification_reference (type, reference_key)
+) ENGINE=InnoDB;

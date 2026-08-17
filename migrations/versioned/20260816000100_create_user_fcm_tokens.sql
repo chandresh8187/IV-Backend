@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS user_fcm_tokens (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  fcm_token VARCHAR(512) NOT NULL,
+  device_type VARCHAR(30) NOT NULL DEFAULT 'android',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fcm_token (fcm_token),
+  INDEX idx_fcm_user (user_id)
+) ENGINE=InnoDB;

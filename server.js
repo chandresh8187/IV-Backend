@@ -12,6 +12,7 @@ const { Server } = require("socket.io");
 
 const db = require("./config/db");
 const maintenanceModeMiddleware = require("./middleware/maintenanceModeMiddleware");
+const { run: runMigrations } = require("./scripts/migrate");
 
 const requiredEnvironment = ["DB_HOST", "DB_USER", "DB_NAME", "JWT_SECRET"];
 const missingEnvironment = requiredEnvironment.filter(
@@ -195,8 +196,35 @@ app.use((error, req, res, next) => {
 });
 
 const port = Number(process.env.PORT) || 5000;
-server.listen(port, () => {
-  console.log(`IV API listening on port ${port}`);
+
+const startServer = async () => {
+  // hPanel can launch server.js directly and bypass package.json scripts.
+  // Always migrate before accepting requests so code and schema stay aligned.
+  await runMigrations({ command: "up", dryRun: false });
+
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      console.log(`IV API listening on port ${port}`);
+      resolve();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port);
+  });
+
+  return server;
+};
+
+const startup = startServer().catch(async (error) => {
+  console.error(`Server startup failed: ${error.message}`);
+  await db.end().catch(() => {});
+  process.exitCode = 1;
 });
 
 const shutdown = (signal) => {
@@ -212,4 +240,4 @@ const shutdown = (signal) => {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-module.exports = { app, server };
+module.exports = { app, server, startServer, startup };
