@@ -9,14 +9,12 @@ const {
 const notifyZincSafely = async ({
   entryId,
   entrySnapshot,
-  io,
   retryIfAlreadySent = false,
 }) => {
   try {
     const result = await checkEntryZincNotification({
       entryId,
       entrySnapshot,
-      io,
       retryIfAlreadySent,
     });
     console.info("Production zinc notification check:", {
@@ -482,7 +480,6 @@ const saveProductionEntry = async (req, res) => {
 
           const zincAlert = await notifyZincSafely({
             entryId: savedEntryId,
-            io,
             entrySnapshot: {
               id: savedEntryId,
               planning_id: Number(planning_id),
@@ -606,7 +603,6 @@ const saveProductionEntry = async (req, res) => {
 
         const zincAlert = await notifyZincSafely({
           entryId: savedEntryId,
-          io,
           retryIfAlreadySent: true,
           entrySnapshot: {
             id: savedEntryId,
@@ -837,7 +833,7 @@ const saveProductionEntry = async (req, res) => {
         sr_no: Number(sr_no),
       });
 
-      notifyZincSafely({ entryId: existingRow.id, io });
+      notifyZincSafely({ entryId: existingRow.id });
 
       return res.json({
         success: true,
@@ -1235,7 +1231,7 @@ const updateProductionById = async (req, res) => {
     }
     await connection.commit();
     req.app.get("io")?.emit("production_updated", { action: "history_updated", production_id: entryId });
-    notifyZincSafely({ entryId, io: req.app.get("io") });
+    notifyZincSafely({ entryId });
     return res.json({ success: true, message: "Production entry updated successfully" });
   } catch (error) {
     await connection.rollback();

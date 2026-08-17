@@ -120,6 +120,52 @@ const removeFcmToken = async (req, res) => {
   }
 };
 
+const checkFcmToken = async (req, res) => {
+  try {
+    const fcmToken = String(req.body.fcm_token || "").trim();
+
+    if (fcmToken.length < 20 || fcmToken.length > 512) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid fcm_token is required",
+      });
+    }
+
+    const [rows] = await db.query(
+      `SELECT user_id
+       FROM user_fcm_tokens
+       WHERE fcm_token = ?
+       LIMIT 1`,
+      [fcmToken],
+    );
+
+    const registeredForCurrentUser =
+      rows.length > 0 && Number(rows[0].user_id) === Number(req.user.id);
+
+    return res.json({
+      success: true,
+      data: {
+        registered: registeredForCurrentUser,
+        reason: registeredForCurrentUser
+          ? "REGISTERED"
+          : rows.length
+            ? "REGISTERED_TO_ANOTHER_USER"
+            : "NOT_REGISTERED",
+      },
+    });
+  } catch (error) {
+    console.error("FCM token check failed:", {
+      user_id: req.user?.id,
+      code: error?.code,
+      message: error?.message,
+    });
+    return res.status(500).json({
+      success: false,
+      message: "Could not check this device notification token",
+    });
+  }
+};
+
 const getMyNotificationStatus = async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -227,16 +273,14 @@ const sendTestNotification = async (req, res) => {
         notification_key: notificationKey,
         triggered_by: String(req.user.id),
       },
-      io: req.app.get("io"),
-      socketEvent: "notification_test",
     });
 
     return res.json({
       success: true,
       message:
-        delivery.successCount || delivery.socketConnectionCount
+        delivery.successCount
           ? "Test notification triggered"
-          : "No connected app or valid notification token received the test",
+          : "No valid notification token received the test",
       data: delivery,
     });
   } catch (error) {
@@ -282,7 +326,6 @@ const testLatestProductionZinc = async (req, res) => {
     const result = await checkEntryZincNotification({
       entryId: entry.id,
       entrySnapshot: entry,
-      io: req.app.get("io"),
       force: true,
     });
 
@@ -313,6 +356,7 @@ const testLatestProductionZinc = async (req, res) => {
 module.exports = {
   saveFcmToken,
   removeFcmToken,
+  checkFcmToken,
   getMyNotificationStatus,
   scheduleMyBackgroundTest,
   sendTestNotification,

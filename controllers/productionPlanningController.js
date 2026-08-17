@@ -241,7 +241,7 @@ const updateProductionPlanning = async (req, res) => {
       });
     }
 
-    checkPlanningZincNotification({ planningId: id, io }).catch((error) => {
+    checkPlanningZincNotification({ planningId: id }).catch((error) => {
       console.error("Planning zinc notification failed:", error);
     });
 

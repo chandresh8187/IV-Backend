@@ -118,8 +118,6 @@ const sendNotificationToRoles = async ({
   title,
   body,
   data = {},
-  io,
-  socketEvent,
 }) => {
   const recipients = await getRoleRecipients({ roles, excludeRoles });
   const recipientUserIds = [
@@ -147,17 +145,6 @@ const sendNotificationToRoles = async ({
       roleStats[role].registeredUserIds.add(Number(recipient.user_id));
     }
   });
-  let socketConnectionCount = 0;
-
-  if (io && socketEvent) {
-    const socketPayload = { ...data, title, body };
-    recipientUserIds.forEach((userId) => {
-      socketConnectionCount +=
-        io.sockets?.adapter?.rooms?.get(`user:${userId}`)?.size || 0;
-      io.to(`user:${userId}`).emit(socketEvent, socketPayload);
-    });
-  }
-
   let pushResult = { successCount: 0, failureCount: 0 };
   let pushErrorCode = null;
 
@@ -179,7 +166,6 @@ const sendNotificationToRoles = async ({
     eligibleUserCount: recipientUserIds.length,
     registeredUserCount: registeredUserIds.size,
     tokenCount: tokens.length,
-    socketConnectionCount,
     pushErrorCode,
     roleStats: Object.fromEntries(
       Object.entries(roleStats).map(([role, stats]) => [

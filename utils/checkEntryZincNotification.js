@@ -8,7 +8,6 @@ const publishOnce = async ({
   title,
   body,
   data,
-  io,
   force = false,
   retryIfAlreadySent = false,
 }) => {
@@ -90,13 +89,9 @@ const publishOnce = async ({
       title,
       body,
       data: notificationData,
-      io,
-      socketEvent: type,
     });
 
-    const delivered = Boolean(
-      response?.successCount || response?.socketConnectionCount,
-    );
+    const delivered = Boolean(response?.successCount);
     const partialFailure = Boolean(
       response?.failureCount || response?.pushErrorCode,
     );
@@ -147,7 +142,6 @@ const hasReachedZincTarget = (zinc, target) =>
 
 const publishPlanningEntryAlert = async ({
   entry,
-  io,
   force = false,
   retryIfAlreadySent = false,
 }) => {
@@ -187,7 +181,6 @@ const publishPlanningEntryAlert = async ({
       zinc_consumption: String(zinc),
       threshold: String(target),
     },
-    io,
     force,
     retryIfAlreadySent,
   });
@@ -195,7 +188,7 @@ const publishPlanningEntryAlert = async ({
   return { ...result, zinc, target };
 };
 
-const checkPlanningZincNotification = async ({ planningId, io }) => {
+const checkPlanningZincNotification = async ({ planningId }) => {
   if (!planningId) return;
 
   const [rows] = await db.query(
@@ -226,13 +219,12 @@ const checkPlanningZincNotification = async ({ planningId, io }) => {
   if (!rows.length) {
     return { triggered: false, reason: "NO_MATCHING_ENTRY" };
   }
-  return publishPlanningEntryAlert({ entry: rows[0], io });
+  return publishPlanningEntryAlert({ entry: rows[0] });
 };
 
 const checkEntryZincNotification = async ({
   entryId,
   entrySnapshot,
-  io,
   force = false,
   retryIfAlreadySent = false,
 }) => {
@@ -268,7 +260,6 @@ const checkEntryZincNotification = async ({
   if (entry.planning_id) {
     planningResult = await publishPlanningEntryAlert({
       entry,
-      io,
       force,
       retryIfAlreadySent,
     });
@@ -328,7 +319,6 @@ const checkEntryZincNotification = async ({
       zinc_consumption: String(monthlyZinc),
       threshold: String(monthlyTarget),
     },
-    io,
   });
 
   return planningResult;

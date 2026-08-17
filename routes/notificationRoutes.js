@@ -7,6 +7,7 @@ const roleMiddleware = require("../middleware/roleMiddleware");
 const {
   saveFcmToken,
   removeFcmToken,
+  checkFcmToken,
   getMyNotificationStatus,
   scheduleMyBackgroundTest,
   sendTestNotification,
@@ -16,6 +17,8 @@ const {
 router.post("/save-token", authMiddleware, saveFcmToken);
 
 router.post("/remove-token", authMiddleware, removeFcmToken);
+
+router.post("/check-token", authMiddleware, checkFcmToken);
 
 router.get("/status", authMiddleware, getMyNotificationStatus);
 
