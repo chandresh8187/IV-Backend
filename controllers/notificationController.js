@@ -250,17 +250,27 @@ const checkFcmToken = async (req, res) => {
       Number(rows[0].user_id) === Number(req.user.id) &&
       rows[0].fcm_token === fcmToken;
 
+    const reason = registeredForCurrentUser
+      ? "REGISTERED"
+      : rows.length
+        ? Number(rows[0].user_id) !== Number(req.user.id)
+          ? "DEVICE_REGISTERED_TO_ANOTHER_USER"
+          : "DEVICE_TOKEN_CHANGED"
+        : "NOT_REGISTERED";
+
+    console.info("FCM token checked:", {
+      user_id: req.user.id,
+      installation_suffix: installationId.slice(-8) || null,
+      token_suffix: fcmToken.slice(-8),
+      registered: registeredForCurrentUser,
+      reason,
+    });
+
     return res.json({
       success: true,
       data: {
         registered: registeredForCurrentUser,
-        reason: registeredForCurrentUser
-          ? "REGISTERED"
-          : rows.length
-            ? Number(rows[0].user_id) !== Number(req.user.id)
-              ? "DEVICE_REGISTERED_TO_ANOTHER_USER"
-              : "DEVICE_TOKEN_CHANGED"
-            : "NOT_REGISTERED",
+        reason,
       },
     });
   } catch (error) {

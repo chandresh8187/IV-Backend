@@ -123,10 +123,21 @@ function validateMigrationSql(sql) {
   const normalizedSql = scannableSql.replace(/\s+/g, " ").trim();
   const isApprovedLegacyFcmRemoval =
     /^ALTER TABLE `?users`? DROP COLUMN `?fcm_token`?$/i.test(normalizedSql);
+  const isApprovedFcmIdRepair =
+    /^ALTER TABLE `?user_fcm_tokens`? MODIFY(?: COLUMN)? `?id`? BIGINT UNSIGNED NOT NULL AUTO_INCREMENT$/i.test(
+      normalizedSql,
+    );
   for (const rule of DESTRUCTIVE_PATTERNS) {
     if (
       rule.pattern.test(scannableSql) &&
-      !(isApprovedLegacyFcmRemoval && rule.reason === "DROP operations are not allowed")
+      !(
+        isApprovedLegacyFcmRemoval &&
+        rule.reason === "DROP operations are not allowed"
+      ) &&
+      !(
+        isApprovedFcmIdRepair &&
+        rule.reason === "CHANGE/MODIFY can rewrite existing column data"
+      )
     ) {
       throw new Error(rule.reason);
     }
