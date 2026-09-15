@@ -53,13 +53,17 @@ const getSummary = async (where, params) => {
   };
 };
 
-const getReportFilter = ({ type, value, date, planningId }) => {
+const getReportFilter = ({ type, value, date, planningId, itemId, shiftName }) => {
   if (type === "material") {
+    const materialWhere = itemId
+      ? "pe.shift_date = ? AND pe.item_id = ?"
+      : "pe.shift_date = ? AND LOWER(pe.material) = LOWER(?)";
+    const materialParams = itemId ? [date, itemId] : [date, value];
     return {
-      where: "pe.shift_date = ? AND LOWER(pe.material) = LOWER(?)",
-      params: [date, value],
+      where: shiftName ? `${materialWhere} AND LOWER(pe.shift_name) = ?` : materialWhere,
+      params: shiftName ? [...materialParams, shiftName] : materialParams,
       reportDate: date,
-      shiftName: `${value} Material`,
+      shiftName: `${shiftName ? `${shiftName} ` : ""}${value} Material`,
     };
   }
 
@@ -86,6 +90,8 @@ const generateProductionReport = async (req, res) => {
     const value = String(req.query.value || "").trim();
     const date = String(req.query.date || "").trim();
     const planningId = Number(req.query.planning_id) || null;
+    const itemId = Number(req.query.item_id) || null;
+    const shiftName = String(req.query.shift_name || "").trim().toLowerCase();
 
     if (!["challan", "material", "shift"].includes(type) || !value) {
       return res.status(400).json({
@@ -108,6 +114,9 @@ const generateProductionReport = async (req, res) => {
         message: "Shift must be day or night",
       });
     }
+    if (shiftName && !["day", "night"].includes(shiftName)) {
+      return res.status(400).json({ success: false, message: "shift_name must be day or night" });
+    }
 
     if (
       type === "challan" &&
@@ -120,7 +129,7 @@ const generateProductionReport = async (req, res) => {
       });
     }
 
-    const filter = getReportFilter({ type, value, date, planningId });
+    const filter = getReportFilter({ type, value, date, planningId, itemId, shiftName });
     const [tableData] = await db.query(
       `
       SELECT

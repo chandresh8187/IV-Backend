@@ -30,6 +30,9 @@ const {
 const {
   extractPlanningPdf,
 } = require("../controllers/productionPlanningPdfController");
+const {
+  getProductionPlanningFile,
+} = require("../controllers/productionPlanningFileController");
 
 router.post(
   "/",
@@ -64,6 +67,13 @@ router.get(
   authMiddleware,
   roleMiddleware(["supervisor", "admin", "superadmin", "plant_manager"], "production.view"),
   getAvailablePlanningDropdown,
+);
+
+router.get(
+  "/:id/pdf",
+  authMiddleware,
+  roleMiddleware(["admin", "superadmin", "plant_manager"], "planning.view"),
+  getProductionPlanningFile,
 );
 
 router.post(

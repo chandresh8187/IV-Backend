@@ -164,6 +164,11 @@ app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/supervisors", require("./routes/supervisorRoutes"));
 app.use("/api/app-update", require("./routes/appUpdateRoutes"));
 app.use("/api/settings", require("./routes/settingsRoutes"));
+app.use("/api/items", require("./routes/itemsRoutes"));
+app.use(
+  "/api/financial-years",
+  require("./routes/financialYearsRoutes"),
+);
 app.use(
   "/api/production-planning",
   require("./routes/productionPlanningRoutes"),

@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
+const { currentHistoryYear } = require('../services/financialYearService');
+router.use(authMiddleware, currentHistoryYear);
 const roleMiddleware = require("../middleware/roleMiddleware");
 const { generateProductionReport } = require("../controllers/productionReportController");
 
@@ -11,6 +13,7 @@ const {
   getHistoryShiftTable,
   getHistoryMaterialSummary,
   getHistoryPlanningSummary,
+  getHistoryPartySummary,
 } = require("../controllers/productionHistoryController");
 
 const historyViewAccess = roleMiddleware(
@@ -27,6 +30,7 @@ router.get("/shift-table", authMiddleware, historyViewAccess, getHistoryShiftTab
 router.get("/material-summary", authMiddleware, historyViewAccess, getHistoryMaterialSummary);
 
 router.get("/planning-summary", authMiddleware, historyViewAccess, getHistoryPlanningSummary);
+router.get('/party-summary', authMiddleware, historyViewAccess, getHistoryPartySummary);
 
 router.get(
   "/report",

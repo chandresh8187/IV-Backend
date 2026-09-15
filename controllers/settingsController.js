@@ -4,6 +4,7 @@ const {
   getSetting,
   clearSettingCache,
 } = require("../services/appSettingsService");
+const { deriveNightShiftStart } = require("../services/automaticShiftService");
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -22,23 +23,15 @@ const normalizeSetting = (key, input = {}) => {
 
   if (key === "shift_schedule") {
     const dayStart = String(input.day_start || "").trim();
-    const nightStart = String(input.night_start || "").trim();
-    if (!TIME_PATTERN.test(dayStart) || !TIME_PATTERN.test(nightStart)) {
-      const error = new Error("Shift times must use 24-hour HH:mm format");
-      error.status = 400;
-      throw error;
-    }
-    if (dayStart >= nightStart) {
-      const error = new Error(
-        "Day shift start must be earlier than night shift start",
-      );
+    if (!TIME_PATTERN.test(dayStart)) {
+      const error = new Error("Day shift start must use 24-hour HH:mm format");
       error.status = 400;
       throw error;
     }
     return {
-      automatic: Boolean(input.automatic),
+      automatic: true,
       day_start: dayStart,
-      night_start: nightStart,
+      night_start: deriveNightShiftStart(dayStart),
     };
   }
 
@@ -69,7 +62,12 @@ const normalizeSetting = (key, input = {}) => {
 
 const getSettings = async (req, res) => {
   try {
-    return res.json({ success: true, data: await getAllSettings() });
+    const settings = await getAllSettings();
+    settings.shift_schedule = normalizeSetting(
+      "shift_schedule",
+      settings.shift_schedule,
+    );
+    return res.json({ success: true, data: settings });
   } catch (error) {
     console.error("getSettings:", error);
     return res

@@ -125,27 +125,12 @@ const getDashboardData = async (req, res) => {
       AND YEAR(shift_date) = ?
     `;
 
-    const activeWhere = "WHERE shift_id = ?";
-    const emptyActiveSummary = {
-      total_ms_production_kg: 0,
-      total_gi_production_kg: 0,
-      zink_used: 0,
-      zinc_consumption: 0,
-    };
-
-    const [
-      dayTotalSummary,
-      nightTotalSummary,
-      monthTotalSummary,
-      activeShiftTotalSummary,
-    ] = await Promise.all([
-      getTotalSummary(dayWhere, [todayDate]),
-      getTotalSummary(nightWhere, [todayDate]),
-      getTotalSummary(monthWhere, [shiftInfo.month, shiftInfo.year]),
-      activeShift
-        ? getTotalSummary(activeWhere, [activeShift.id])
-        : Promise.resolve(emptyActiveSummary),
-    ]);
+    const [dayTotalSummary, nightTotalSummary, monthTotalSummary] =
+      await Promise.all([
+        getTotalSummary(dayWhere, [todayDate]),
+        getTotalSummary(nightWhere, [todayDate]),
+        getTotalSummary(monthWhere, [shiftInfo.month, shiftInfo.year]),
+      ]);
 
     const [monthlyRows] = await db.query(
       `SELECT DATE_FORMAT(production_date,'%Y-%m-%d') production_date,
@@ -175,9 +160,6 @@ const getDashboardData = async (req, res) => {
       };
     });
 
-    const activeShiftZincConsumption =
-      activeShiftTotalSummary.zinc_consumption;
-
     return res.json({
       success: true,
       message: "Dashboard data fetched successfully",
@@ -190,7 +172,8 @@ const getDashboardData = async (req, res) => {
           current_shift: currentShift,
           is_shift_active: !!activeShift,
           active_shift: activeShift,
-          automatic: Boolean(schedule.automatic),
+          automatic: true,
+          shift_duration_hours: 12,
           timezone: shiftInfo.timezone,
           shift_start: shiftInfo.shift_start,
           shift_end: shiftInfo.shift_end,
@@ -209,11 +192,6 @@ const getDashboardData = async (req, res) => {
         current_month: {
           ...monthTotalSummary,
           daily_summary: monthlyProductionSummary,
-        },
-
-        active_shift_summary: {
-          ...activeShiftTotalSummary,
-          zinc_consumption: activeShiftZincConsumption,
         },
       },
     });

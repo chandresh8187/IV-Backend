@@ -11,14 +11,36 @@ const toMinutes = (value) => {
 
 const toMySqlDateTime = (value) => value.toFormat("yyyy-LL-dd HH:mm:ss");
 
-const getShiftSchedule = async (executor = db) =>
-  getSetting("shift_schedule", executor);
+const toTimeText = (minutes) => {
+  const normalized = ((minutes % 1440) + 1440) % 1440;
+  const hours = String(Math.floor(normalized / 60)).padStart(2, "0");
+  const remainingMinutes = String(normalized % 60).padStart(2, "0");
+  return `${hours}:${remainingMinutes}`;
+};
+
+const deriveNightShiftStart = (dayStart = "08:00") =>
+  toTimeText(toMinutes(dayStart) + 12 * 60);
+
+const getShiftSchedule = async (executor = db) => {
+  const stored = await getSetting("shift_schedule", executor);
+  const dayStart = /^([01]\d|2[0-3]):([0-5]\d)$/.test(stored.day_start)
+    ? stored.day_start
+    : "08:00";
+
+  return {
+    automatic: true,
+    day_start: dayStart,
+    night_start: deriveNightShiftStart(dayStart),
+  };
+};
 
 const getCurrentShiftInfo = (inputDateTime = null, schedule = {}) => {
-  const dayStartText = schedule.day_start || "08:00";
-  const nightStartText = schedule.night_start || "20:00";
+  const requestedDayStart = schedule.day_start || "08:00";
+  const dayStartText = /^([01]\d|2[0-3]):([0-5]\d)$/.test(requestedDayStart)
+    ? requestedDayStart
+    : "08:00";
+  const nightStartText = deriveNightShiftStart(dayStartText);
   const [dayHour, dayMinute] = dayStartText.split(":").map(Number);
-  const [nightHour, nightMinute] = nightStartText.split(":").map(Number);
 
   let now;
   if (inputDateTime && DateTime.isDateTime(inputDateTime)) {
@@ -33,27 +55,20 @@ const getCurrentShiftInfo = (inputDateTime = null, schedule = {}) => {
 
   if (!now.isValid) throw new Error("Invalid date supplied to shift service");
 
-  const currentMinutes = now.hour * 60 + now.minute;
-  const dayStartMinutes = toMinutes(dayStartText);
-  const nightStartMinutes = toMinutes(nightStartText);
-  const isDay =
-    currentMinutes >= dayStartMinutes && currentMinutes < nightStartMinutes;
-
-  let shiftDate = now.startOf("day");
-  let shiftStart;
-  let shiftEnd;
-
-  if (isDay) {
-    shiftStart = shiftDate.set({ hour: dayHour, minute: dayMinute });
-    shiftEnd = shiftDate.set({ hour: nightHour, minute: nightMinute });
-  } else {
-    if (currentMinutes < dayStartMinutes)
-      shiftDate = shiftDate.minus({ days: 1 });
-    shiftStart = shiftDate.set({ hour: nightHour, minute: nightMinute });
-    shiftEnd = shiftDate
-      .plus({ days: 1 })
-      .set({ hour: dayHour, minute: dayMinute });
-  }
+  const todayDayStart = now
+    .startOf("day")
+    .set({ hour: dayHour, minute: dayMinute });
+  const operationalDayStart =
+    now.toMillis() < todayDayStart.toMillis()
+      ? todayDayStart.minus({ days: 1 })
+      : todayDayStart;
+  const elapsedMinutes = now.diff(operationalDayStart, "minutes").minutes;
+  const isDay = elapsedMinutes < 12 * 60;
+  const shiftStart = isDay
+    ? operationalDayStart
+    : operationalDayStart.plus({ hours: 12 });
+  const shiftEnd = shiftStart.plus({ hours: 12 });
+  const shiftDate = operationalDayStart.startOf("day");
 
   return {
     shift_name: isDay ? "day" : "night",
@@ -62,7 +77,7 @@ const getCurrentShiftInfo = (inputDateTime = null, schedule = {}) => {
     shift_end: toMySqlDateTime(shiftEnd),
     current_time: toMySqlDateTime(now),
     timezone: TIME_ZONE,
-    automatic: Boolean(schedule.automatic),
+    automatic: true,
     day_start: dayStartText,
     night_start: nightStartText,
     year: shiftDate.year,
@@ -76,31 +91,12 @@ const formatDbDate = (value) => {
   return DateTime.fromJSDate(new Date(value), { zone: TIME_ZONE }).toISODate();
 };
 
-const getManualActiveShift = async (executor = db) => {
-  const [rows] = await executor.query(
-    "SELECT * FROM shifts WHERE status = 'active' ORDER BY id DESC LIMIT 1",
-  );
-  return rows[0] || null;
-};
-
 // Called by status/dashboard/production APIs, so no cron job is required.
 const ensureAutomaticShift = async () => {
   const connection = await db.getConnection();
   let transactionStarted = false;
   try {
     const schedule = await getShiftSchedule(connection);
-
-    if (!schedule.automatic) {
-      const active = await getManualActiveShift(connection);
-      return active
-        ? {
-            ...active,
-            shift_date: formatDbDate(active.shift_date),
-            automatic: false,
-            timezone: TIME_ZONE,
-          }
-        : null;
-    }
 
     const info = getCurrentShiftInfo(null, schedule);
     await connection.beginTransaction();
@@ -198,8 +194,8 @@ const ensureAutomaticShift = async () => {
 
 module.exports = {
   TIME_ZONE,
+  deriveNightShiftStart,
   getShiftSchedule,
   getCurrentShiftInfo,
-  getManualActiveShift,
   ensureAutomaticShift,
 };

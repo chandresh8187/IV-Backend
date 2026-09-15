@@ -10,6 +10,8 @@ const publishOnce = async ({
   data,
   force = false,
   retryIfAlreadySent = false,
+  roles = ["superadmin", "admin", "plant_manager"],
+  excludeRoles = ["supervisor"],
 }) => {
   let claimed = false;
   let replaying = force;
@@ -84,8 +86,8 @@ const publishOnce = async ({
 
   try {
     const response = await sendNotificationToRoles({
-      roles: ["superadmin", "admin", "plant_manager"],
-      excludeRoles: ["supervisor"],
+      roles,
+      excludeRoles,
       title,
       body,
       data: notificationData,
@@ -199,18 +201,21 @@ const checkPlanningZincNotification = async ({ planningId }) => {
             pe.ms_weight,
             pe.gi_weight,
             pe.zinc_percentage,
-            pp.target_zinc_percentage
+            COALESCE(ppi.target_zinc_percentage, pp.target_zinc_percentage)
+              AS target_zinc_percentage
      FROM production_entries pe
      INNER JOIN production_planning pp
        ON pp.id = pe.planning_id
       AND pp.deleted_at IS NULL
+     LEFT JOIN production_planning_items ppi
+       ON ppi.id = pe.planning_item_id
      WHERE pe.planning_id = ?
        AND COALESCE(pe.row_type, 'entry') = 'entry'
-       AND pp.target_zinc_percentage > 0
+       AND COALESCE(ppi.target_zinc_percentage, pp.target_zinc_percentage) > 0
        AND COALESCE(
          pe.zinc_percentage,
          ROUND(((pe.gi_weight - pe.ms_weight) / NULLIF(pe.ms_weight, 0)) * 100, 2)
-       ) >= pp.target_zinc_percentage
+       ) >= COALESCE(ppi.target_zinc_percentage, pp.target_zinc_percentage)
      ORDER BY pe.id DESC
      LIMIT 1`,
     [planningId],
@@ -240,11 +245,14 @@ const checkEntryZincNotification = async ({
             pe.ms_weight,
             pe.gi_weight,
             pe.zinc_percentage,
-            pp.target_zinc_percentage
+            COALESCE(ppi.target_zinc_percentage, pp.target_zinc_percentage)
+              AS target_zinc_percentage
      FROM production_entries pe
      LEFT JOIN production_planning pp
        ON pp.id = pe.planning_id
       AND pp.deleted_at IS NULL
+     LEFT JOIN production_planning_items ppi
+       ON ppi.id = pe.planning_item_id
      WHERE pe.id = ? LIMIT 1`,
       [entryId],
     );
@@ -329,4 +337,5 @@ module.exports = {
   checkEntryZincNotification,
   checkPlanningZincNotification,
   hasReachedZincTarget,
+  publishOnce,
 };
