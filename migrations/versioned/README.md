@@ -10,7 +10,9 @@ npm run migration:create -- add_feature_column
 
 Each file must contain exactly one additive SQL statement. The runner rejects `DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, `REPLACE`, table renames, column `CHANGE`/`MODIFY`, disabled foreign-key checks, and bulk data loading.
 
-The only destructive exception is the one-time, exact removal of
+An exact null-only backfill of `production_planning.queue_position` is permitted to initialize the newly added queue field. It does not overwrite saved priorities or production quantities; other UPDATE statements remain blocked.
+
+The destructive exception is the one-time, exact removal of
 `users.fcm_token` after its values are backfilled into `user_fcm_tokens`.
 All notification token writes and reads use the multi-device table.
 

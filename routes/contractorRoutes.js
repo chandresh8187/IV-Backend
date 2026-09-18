@@ -1,0 +1,11 @@
+const router = require('express').Router();
+const auth = require('../middleware/authMiddleware');
+const access = require('../middleware/roleMiddleware');
+const { currentHistoryYear } = require('../services/financialYearService');
+const controller = require('../controllers/contractorController');
+router.use(auth);
+router.get('/', access([], 'contractors.view'), controller.listContractors);
+router.get('/report', access([], 'contractors.view'), currentHistoryYear, controller.getContractorReport);
+router.post('/', access([], 'contractors.manage'), controller.createContractor);
+router.put('/assignments', access([], 'contractors.manage'), controller.saveAssignment);
+module.exports = router;

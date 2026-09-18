@@ -19,6 +19,10 @@ const upload = multer({
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
+const { reorderPlanningQueue } = require('../controllers/planningQueueController');
+
+router.put('/order', authMiddleware, roleMiddleware(['superadmin', 'plant_manager']),
+  roleMiddleware([], 'planning.manage'), reorderPlanningQueue);
 
 const {
   createProductionPlanning,

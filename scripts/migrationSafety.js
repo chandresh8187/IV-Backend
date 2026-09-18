@@ -121,6 +121,9 @@ function validateMigrationSql(sql) {
 
   const scannableSql = maskQuotedValues(stripSqlComments(statements[0]));
   const normalizedSql = scannableSql.replace(/\s+/g, " ").trim();
+  // Exact, null-only backfill of the new queue field, not a general UPDATE exemption.
+  const isApprovedPlanningQueueInitialization =
+    /^UPDATE production_planning SET queue_position = -CAST\(id AS SIGNED\) WHERE queue_position IS NULL$/i.test(normalizedSql);
   const isApprovedLegacyFcmRemoval =
     /^ALTER TABLE `?users`? DROP COLUMN `?fcm_token`?$/i.test(normalizedSql);
   const isApprovedFcmIdRepair =
@@ -130,6 +133,10 @@ function validateMigrationSql(sql) {
   for (const rule of DESTRUCTIVE_PATTERNS) {
     if (
       rule.pattern.test(scannableSql) &&
+      !(
+        isApprovedPlanningQueueInitialization &&
+        rule.reason === "migrations cannot update existing rows"
+      ) &&
       !(
         isApprovedLegacyFcmRemoval &&
         rule.reason === "DROP operations are not allowed"

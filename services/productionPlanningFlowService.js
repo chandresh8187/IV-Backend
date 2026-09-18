@@ -19,7 +19,7 @@ const getActivePlanningItem = async (queryable, { lock = false } = {}) => {
        AND pp.status = 'pending'
        AND ppi.status = 'pending'
        AND ppi.planned_qty > ppi.completed_qty
-     ORDER BY pp.created_at ASC, pp.id ASC, ppi.sequence_no ASC
+     ORDER BY COALESCE(pp.queue_position, pp.id) ASC, pp.id ASC, ppi.sequence_no ASC
      LIMIT 1${lock ? " FOR UPDATE" : ""}`,
   );
 

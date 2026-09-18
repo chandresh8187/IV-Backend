@@ -591,7 +591,7 @@ const getProductionPlanning = async (req, res) => {
       query += " AND pp.status = ?";
       params.push(status);
     }
-    query += " ORDER BY pp.id DESC";
+    query += status === 'completed' ? " ORDER BY pp.id DESC" : " ORDER BY COALESCE(pp.queue_position, pp.id) ASC, pp.id ASC";
     const [rows] = await db.query(query, params);
 
     if (rows.length) {

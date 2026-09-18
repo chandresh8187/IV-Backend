@@ -43,9 +43,9 @@ const assertContext = (body, context) => {
 
 // Serialize saves with manager selection/resume. Call inside the save transaction.
 const lockProductionContext = async (executor, context, body) => {
-  const state = context.ignoreCorrection ? context.state : await getCorrectionState(executor, true);
-  if (Number(state.revision) !== Number(context.state.revision) ||
-      Number(state.correction_shift_id) !== Number(context.state.correction_shift_id)) {
+  const state = await getCorrectionState(executor, true);
+  if (!context.ignoreCorrection && (Number(state.revision) !== Number(context.state.revision) ||
+      Number(state.correction_shift_id) !== Number(context.state.correction_shift_id))) {
     throw conflict('A manager changed the production shift. Reopen the entry and try again.');
   }
   assertContext(body, context);

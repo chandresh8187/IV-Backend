@@ -3,6 +3,8 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
+  { key: 'contractors.view', group: 'Contractors', label: 'View contractor production', description: 'View contractor shift assignments and production totals.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'contractors.manage', group: 'Contractors', label: 'Manage contractor assignments', description: 'Add contractors and configure repeating Day/Night assignments.', defaultRoles: ['superadmin', 'plant_manager'] },
   { key: "dashboard.view", group: "Dashboard", label: "View dashboard", description: "View plant and production dashboard data.", defaultRoles: ["superadmin", "plant_manager", "admin"] },
   { key: "production.view", group: "Production", label: "View live production", description: "View current production entries and row details.", defaultRoles: ALL_ROLES },
   { key: "production.save", group: "Production", label: "Add or delegated edit", description: "Add production or use a one-time unlocked SR edit.", defaultRoles: ["superadmin", "plant_manager", "supervisor"] },
