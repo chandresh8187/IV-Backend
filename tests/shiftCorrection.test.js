@@ -121,11 +121,19 @@ test('normal shift still requires a grant for supervisor edits', async () => {
   assert.equal(f.writes.length, 0);
 });
 
-test('normal additions retain automatic planning assignment', async () => {
+test('normal additions require explicit selection instead of falling back to the first flow', async () => {
+  const f = fixture({ correction: false }); const res = f.response();
+  await f.production.saveProductionEntry(f.request({ planning_item_id: null }), res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.stats().autoAssignments, 0);
+});
+
+test('normal additions use the explicitly selected challan without auto assignment', async () => {
   const f = fixture({ correction: false }); const res = f.response();
   await f.production.saveProductionEntry(f.request(), res);
   assert.equal(res.statusCode, 201);
-  assert.equal(f.stats().autoAssignments, 1);
+  assert.equal(f.stats().autoAssignments, 0);
   assert.equal(f.writes[0].params[0], 20);
 });
 

@@ -3,9 +3,7 @@ const { getConfiguredCurrentFinancialYear } = require('../services/financialYear
 const {
   checkPlanningZincNotification,
 } = require("../utils/checkEntryZincNotification");
-const {
-  getActivePlanningItem,
-} = require("../services/productionPlanningFlowService");
+const { normalizePlanningChallan, formatPlanningChallan } = require('../services/planningChallanService');
 
 const makeHttpError = (status, message, code) => {
   const error = new Error(message);
@@ -17,18 +15,6 @@ const makeHttpError = (status, message, code) => {
 const parsePositiveId = (value) => {
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
-};
-
-const normalizeChallanNumber = (value) => {
-  const number = String(value || "").trim();
-  if (!/^\d{1,40}$/.test(number)) {
-    throw makeHttpError(
-      400,
-      "Challan number must contain only numbers",
-      "INVALID_CHALLAN_NUMBER",
-    );
-  }
-  return number;
 };
 
 const normalizeMaterialDetail = (value, index) => {
@@ -52,7 +38,7 @@ const normalizePlanningItems = async (queryable, value) => {
   }
 
   const normalized = value.map((item, index) => {
-    const challanNumber = normalizeChallanNumber(item?.challan_number);
+    const challan = normalizePlanningChallan(item || {});
     const partyName = String(item?.party_name || "").trim();
     const itemId = parsePositiveId(item?.item_id);
     const plannedQty = Number(item?.planned_qty);
@@ -87,7 +73,7 @@ const normalizePlanningItems = async (queryable, value) => {
 
     return {
       id: planningItemId,
-      challan_number: challanNumber,
+      ...challan,
       party_name: partyName,
       item_id: itemId,
       material_detail: materialDetail,
@@ -115,7 +101,7 @@ const normalizePlanningItems = async (queryable, value) => {
   return normalized.map((item, index) => {
     const itemName = itemsById.get(item.item_id).item_name;
     const materialDescription = item.material_detail
-      ? `${itemName} + ${item.material_detail}`
+      ? `${itemName} ${item.material_detail}`
       : itemName;
     if (materialDescription.length > 255) {
       throw makeHttpError(
@@ -146,7 +132,7 @@ const createProductionPlanning = async (req, res) => {
       await normalizePlanningItems(connection, req.body?.items)
     ).map((item) => ({
       ...item,
-      challan_no: `DC/${financialYear.financial_year}/${item.challan_number}`,
+      challan_no: formatPlanningChallan(item, financialYear.financial_year),
     }));
     const uniqueChallans = new Set(
       planningItems.map((item) => item.challan_no.toLowerCase()),
@@ -202,8 +188,8 @@ const createProductionPlanning = async (req, res) => {
       await connection.query(
         `INSERT INTO production_planning_items
          (planning_id, challan_no, party_name, item_id, material_detail, material_description, planned_qty,
-          target_zinc_percentage, sequence_no)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          target_zinc_percentage, sequence_no, planning_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           result.insertId,
           item.challan_no,
@@ -214,6 +200,7 @@ const createProductionPlanning = async (req, res) => {
           item.planned_qty,
           item.target_zinc_percentage,
           item.sequence_no,
+          item.planning_source,
         ],
       );
     }
@@ -291,16 +278,8 @@ const updateProductionPlanning = async (req, res) => {
         "PLANNING_FINANCIAL_YEAR_NOT_FOUND",
       );
     }
-    const currentPrefix = `DC/${financialYear.financial_year}/`;
     planningItems.forEach((item) => {
-      const existingItem = item.id ? existingById.get(item.id) : null;
-      const previousChallan =
-        existingItem?.challan_no ||
-        (existingItem === existingItems[0] ? planning.challan_no : "");
-      const previousPrefix = String(previousChallan || "").match(
-        /^DC\/[^/]+\//i,
-      )?.[0];
-      item.challan_no = `${previousPrefix || currentPrefix}${item.challan_number}`;
+      item.challan_no = formatPlanningChallan(item, financialYear.financial_year);
     });
 
     const uniqueChallans = new Set(
@@ -414,7 +393,7 @@ const updateProductionPlanning = async (req, res) => {
         await connection.query(
           `UPDATE production_planning_items
            SET challan_no = ?, party_name = ?, item_id = ?, material_detail = ?,
-               material_description = ?, planned_qty = ?,
+               material_description = ?, planned_qty = ?, planning_source = ?,
                completed_qty = ?, target_zinc_percentage = ?, sequence_no = ?,
                status = CASE WHEN ? >= ? THEN 'completed' ELSE 'pending' END,
                updated_at = CURRENT_TIMESTAMP
@@ -426,6 +405,7 @@ const updateProductionPlanning = async (req, res) => {
             item.material_detail || null,
             item.material_description,
             item.planned_qty,
+            item.planning_source,
             item.completed_qty || 0,
             item.target_zinc_percentage,
             item.sequence_no,
@@ -439,8 +419,8 @@ const updateProductionPlanning = async (req, res) => {
         await connection.query(
           `INSERT INTO production_planning_items
            (planning_id, challan_no, party_name, item_id, material_detail, material_description, planned_qty,
-            target_zinc_percentage, sequence_no)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            target_zinc_percentage, sequence_no, planning_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             item.challan_no,
@@ -451,6 +431,7 @@ const updateProductionPlanning = async (req, res) => {
             item.planned_qty,
             item.target_zinc_percentage,
             item.sequence_no,
+            item.planning_source,
           ],
         );
       }
@@ -591,7 +572,7 @@ const getProductionPlanning = async (req, res) => {
       query += " AND pp.status = ?";
       params.push(status);
     }
-    query += status === 'completed' ? " ORDER BY pp.id DESC" : " ORDER BY COALESCE(pp.queue_position, pp.id) ASC, pp.id ASC";
+    query += " ORDER BY pp.id DESC";
     const [rows] = await db.query(query, params);
 
     if (rows.length) {
@@ -599,7 +580,7 @@ const getProductionPlanning = async (req, res) => {
         `SELECT ppi.id, ppi.planning_id,
                 COALESCE(ppi.challan_no, pp.challan_no) AS challan_no,
                 COALESCE(ppi.party_name, pp.party_name, '') AS party_name,
-                ppi.item_id, ppi.material_detail, ppi.material_description, ppi.planned_qty,
+                ppi.item_id, ppi.material_detail, ppi.material_description, ppi.planned_qty, ppi.planning_source,
                 ppi.completed_qty, ppi.target_zinc_percentage,
                 ppi.sequence_no, ppi.status, ppi.created_at, ppi.updated_at,
                 COALESCE(i.item_name, ppi.material_description) AS item_name,
@@ -639,28 +620,19 @@ const getProductionPlanning = async (req, res) => {
 
 const getAvailablePlanningDropdown = async (req, res) => {
   try {
-    const active = await getActivePlanningItem(db);
-    const data = active
-      ? [
-          {
-            id: active.planning_id,
-            planning_item_id: active.planning_item_id,
-            challan_no: active.challan_no,
-            party_name: active.party_name || "",
-            material_description: active.material_description,
-            planned_qty: active.planned_qty,
-            completed_qty: active.completed_qty,
-            remaining_qty: active.remaining_qty,
-            target_zinc_percentage: active.target_zinc_percentage,
-            sequence_no: active.sequence_no,
-          },
-        ]
-      : [];
+    const [data] = await db.query(`SELECT pp.id, pp.id AS planning_id, ppi.id AS planning_item_id,
+      COALESCE(ppi.challan_no, pp.challan_no) AS challan_no,
+      COALESCE(ppi.party_name, pp.party_name, '') AS party_name,
+      ppi.material_description, ppi.item_id, ppi.planning_source,
+      ppi.planned_qty, ppi.completed_qty, (ppi.planned_qty - ppi.completed_qty) AS remaining_qty,
+      ppi.target_zinc_percentage, ppi.sequence_no
+      FROM production_planning pp JOIN production_planning_items ppi ON ppi.planning_id = pp.id
+      WHERE pp.deleted_at IS NULL AND pp.status = 'pending' AND ppi.status = 'pending'
+        AND ppi.planned_qty > ppi.completed_qty
+      ORDER BY pp.id DESC, ppi.sequence_no ASC`);
     return res.json({
       success: true,
-      message: active
-        ? "Current production flow fetched successfully"
-        : "No pending production flow",
+      message: 'Pending planning challans fetched successfully',
       data,
     });
   } catch (error) {

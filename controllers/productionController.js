@@ -9,7 +9,6 @@ const {
   notifyProductionFlowCompletion,
 } = require("../utils/checkProductionFlowCompletion");
 const {
-  getActivePlanningItem,
   recalculatePlanningProgress,
 } = require("../services/productionPlanningFlowService");
 
@@ -279,10 +278,10 @@ const saveProductionEntry = async (req, res) => {
             ],
           );
           planning = planningRows[0] || null;
-        } else if (productionContext.correction) {
+        } else {
           const planningItemId = Number(req.body.planning_item_id);
           if (!Number.isSafeInteger(planningItemId) || planningItemId < 1) {
-            throw Object.assign(new Error('Select the planning challan item for this missed entry'), { status: 400 });
+            throw Object.assign(new Error('Select a planning challan before saving production'), { status: 400 });
           }
           const [planningRows] = await connection.query(
             `SELECT pp.id AS planning_id, ppi.id AS planning_item_id, ppi.item_id,
@@ -292,17 +291,10 @@ const saveProductionEntry = async (req, res) => {
                     ppi.target_zinc_percentage, ppi.sequence_no
              FROM production_planning_items ppi JOIN production_planning pp ON pp.id = ppi.planning_id
              WHERE ppi.id = ? AND pp.deleted_at IS NULL AND pp.status <> 'canceled'
+               ${productionContext.correction ? '' : "AND pp.status = 'pending' AND ppi.status = 'pending'"}
              LIMIT 1 FOR UPDATE`, [planningItemId],
           );
           planning = planningRows[0] || null;
-        } else {
-          planning = await getActivePlanningItem(connection, { lock: true });
-          if (planning && req.body.planning_item_id != null &&
-              Number(req.body.planning_item_id) !== Number(planning.planning_item_id)) {
-            throw Object.assign(new Error('The production flow changed. Reopen the production form and review the selected material before saving.'), {
-              status: 409, code: 'PRODUCTION_FLOW_CHANGED',
-            });
-          }
         }
 
         if (!planning) {
