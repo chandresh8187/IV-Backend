@@ -3,6 +3,8 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
+  { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and movements.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'zinc_stock.manage', group: 'Zinc Stock', label: 'Manage zinc stock', description: 'Set or change balances, receive zinc and transfer plant stock to the kettle.', defaultRoles: ['superadmin', 'plant_manager'] },
   { key: 'rate_calculator.view', group: 'Production', label: 'Use rate calculator', description: 'Calculate zinc consumption cost and final production rate.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'contractors.view', group: 'Contractors', label: 'View contractor production', description: 'View contractor shift assignments and production totals.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'contractors.manage', group: 'Contractors', label: 'Manage contractor assignments', description: 'Add contractors and configure repeating Day/Night assignments.', defaultRoles: ['superadmin', 'plant_manager'] },

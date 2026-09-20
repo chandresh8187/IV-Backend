@@ -158,6 +158,7 @@ app.use("/api/productions", require("./routes/productionRoutes"));
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/shifts", require("./routes/shiftRoutes"));
 app.use('/api/contractors', require('./routes/contractorRoutes'));
+app.use('/api/zinc-stock', require('./routes/zincStockRoutes'));
 app.use("/api/plant", require("./routes/plantStatusRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));

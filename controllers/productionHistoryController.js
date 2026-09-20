@@ -124,7 +124,8 @@ const getHistoryShiftTable = async (req, res) => {
       [date, shiftName],
     );
     const [tableData] = await db.query(
-      `SELECT id, shift_id, planning_id, planning_item_id, item_id,
+      `SELECT id, shift_id, planning_id, planning_item_id, item_id, contractor_id,
+              (SELECT name FROM contractors WHERE contractors.id = production_entries.contractor_id) AS contractor_name,
               DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date,
               shift_name, sr_no, production_time, challan_no, party_name, material,
               dipping_qty, kettle_temperature, ms_weight, gi_weight,

@@ -3,6 +3,7 @@ const router = express.Router();
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
+const { listContractorDirectory } = require('../controllers/contractorController');
 
 const {
   saveProductionEntry,
@@ -29,6 +30,9 @@ router.get(
   getProductions,
 );
 
+router.get('/contractors', authMiddleware, roleMiddleware([], 'production.view'), listContractorDirectory);
+router.get('/preferences/defaults', authMiddleware, getProductionPreference);
+router.put('/preferences/defaults', authMiddleware, roleMiddleware([], 'production.save'), setProductionPreference);
 router.get("/preferences/default-challan", authMiddleware, getProductionPreference);
 router.put(
   "/preferences/default-challan",

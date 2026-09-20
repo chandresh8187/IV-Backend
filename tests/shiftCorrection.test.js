@@ -18,11 +18,11 @@ function load(relative, dependencies) {
   return module.exports;
 }
 
-function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false } = {}) {
+function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false, contractorExists = true, existingContractor = null } = {}) {
   let state = { id: 1, correction_shift_id: correction ? 10 : null, revision: correction ? 1 : 2 };
   const current = { id: 20, shift_date: '2026-09-12', shift_name: 'day', status: 'active' };
   const previous = { id: 10, shift_date: '2026-09-11', shift_name: 'night', status: 'closed' };
-  const entry = existing ? { id: 50, sr_no: 1, shift_id: 10, planning_id: 7, planning_item_id: 8 } : null;
+  const entry = existing ? { id: 50, sr_no: 1, shift_id: 10, planning_id: 7, planning_item_id: 8, contractor_id: existingContractor } : null;
   const plan = { planning_id: 7, planning_item_id: 8, item_id: 3, challan_no: 'DC/2026-27/001',
     party_name: 'Test party', material_description: 'MS W BEAM + 1.7mm', planned_qty: 10,
     completed_qty: usedQty, target_zinc_percentage: 7, sequence_no: 1 };
@@ -33,6 +33,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
   let autoAssignments = 0;
   const query = async (sql, params = []) => {
     assert.equal((sql.match(/\?/g) || []).length, params.length, `SQL parameters: ${sql}`);
+    if (sql.includes('FROM contractors')) return [contractorExists ? [{ id: params[0] }] : []];
     if (sql.includes('FROM production_shift_context')) {
       if (switchDuringSave && sql.includes('FOR UPDATE')) state = { ...state, correction_shift_id: null, revision: 2 };
       return [[{ ...state }]];
@@ -75,6 +76,11 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
     '../services/productionPlanningFlowService': {
       getActivePlanningItem: async () => { autoAssignments += 1; return plan; },
       recalculatePlanningProgress: async () => ({ status: 'pending' }),
+    },
+    '../services/productionZincStockService': {
+      calculateProductionZincKg: ({ dipping_qty, ms_weight, gi_weight }) =>
+        Math.max(0, Number(gi_weight) - Number(ms_weight)) * Number(dipping_qty),
+      applyProductionZinc: async () => {},
     },
   });
   const managers = load('controllers/shiftCorrectionController.js', {
@@ -135,6 +141,27 @@ test('normal additions use the explicitly selected challan without auto assignme
   assert.equal(res.statusCode, 201);
   assert.equal(f.stats().autoAssignments, 0);
   assert.equal(f.writes[0].params[0], 20);
+});
+
+test('production links the selected contractor ID in the same transaction', async () => {
+  const f = fixture({ correction: false }); const res = f.response();
+  await f.production.saveProductionEntry(f.request({ contractor_id: 2 }), res);
+  assert.equal(res.statusCode, 201);
+  assert.equal(f.writes[0].params.at(-1), 2);
+  assert.equal(res.body.data.contractor_id, 2);
+});
+
+test('unavailable contractor prevents any production write', async () => {
+  const f = fixture({ contractorExists: false }); const res = f.response();
+  await f.production.saveProductionEntry(f.request({ contractor_id: 2 }), res);
+  assert.equal(res.statusCode, 409); assert.equal(f.writes.length, 0);
+});
+
+test('editing from an older client preserves the stored contractor', async () => {
+  const f = fixture({ existing: true, existingContractor: 2 }); const res = f.response();
+  await f.production.saveProductionEntry(f.request(), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(f.writes[0].params.at(-2), 2);
 });
 
 test('correction cannot exceed the planned quantity', async () => {

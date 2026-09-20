@@ -1,4 +1,9 @@
 const db = require("../config/db");
+const { validateContractor } = require('../services/productionContractorService');
+const {
+  calculateProductionZincKg,
+  applyProductionZinc,
+} = require('../services/productionZincStockService');
 const { hasPermission } = require("../services/permissionService");
 const { getCorrectionState, getProductionContext, assertContext, lockProductionContext, canUseShiftCorrection } = require('../services/productionShiftContextService');
 const { getPlantStatusRow } = require("./plantStatusController");
@@ -226,8 +231,7 @@ const saveProductionEntry = async (req, res) => {
       activeEditGrantId = grantRows[0].id;
     }
 
-    // FULL ENTRY - planning/challan/material are assigned by the server from
-    // the first unfinished item in the oldest unfinished production plan.
+    // FULL ENTRY - resolve the selected item and contractor by immutable IDs.
     if (entry_type === "full") {
       const qty = Number(dipping_qty);
       if (!Number.isInteger(qty) || qty <= 0) {
@@ -241,6 +245,9 @@ const saveProductionEntry = async (req, res) => {
       try {
         await connection.beginTransaction();
         await lockProductionContext(connection, productionContext, req.body);
+        const contractorId = await validateContractor(connection,
+          Object.prototype.hasOwnProperty.call(req.body, 'contractor_id')
+            ? req.body.contractor_id : existingRow?.contractor_id ?? null);
         const [lockedRows] = await connection.query(
           `SELECT id FROM production_entries WHERE shift_id = ? AND sr_no = ?
            AND COALESCE(row_type, 'entry') = 'entry' FOR UPDATE`, [activeShift.id, serialNumber],
@@ -352,6 +359,11 @@ const saveProductionEntry = async (req, res) => {
         const zincPercentage = calculateZincPercentage(ms_weight, gi_weight);
         const productionWeight = calculateProductionWeight(qty, ms_weight);
         const avgCoating = calculateAvgCoating([c1, c2, c3, c4, c5]);
+        const zincStockKg = calculateProductionZincKg({
+          dipping_qty: qty,
+          ms_weight,
+          gi_weight,
+        });
         let savedEntryId;
         let savedSrNo;
         let action;
@@ -364,7 +376,7 @@ const saveProductionEntry = async (req, res) => {
                  dipping_qty = ?, kettle_temperature = ?, ms_weight = ?,
                  gi_weight = ?, zinc_percentage = ?, production_weight = ?,
                  c1 = ?, c2 = ?, c3 = ?, c4 = ?, c5 = ?, avg_coating = ?,
-                 updated_by = ?
+                 updated_by = ?, zinc_stock_deducted_kg = ?, contractor_id = ?
              WHERE id = ?`,
             [
               planningId,
@@ -387,12 +399,21 @@ const saveProductionEntry = async (req, res) => {
               c5 || null,
               avgCoating,
               req.user.id,
+              zincStockKg,
+              contractorId,
               existingRow.id,
             ],
           );
           await consumeEditGrant(connection, activeEditGrantId);
           savedEntryId = existingRow.id;
           savedSrNo = Number(existingRow.sr_no);
+          await applyProductionZinc(connection, {
+            entryId: savedEntryId,
+            srNo: savedSrNo,
+            actorUserId: req.user.id,
+            previousKg: existingRow.zinc_stock_deducted_kg,
+            nextKg: zincStockKg,
+          });
           action = "updated";
         } else {
           const [nextSrRows] = await connection.query(
@@ -407,8 +428,9 @@ const saveProductionEntry = async (req, res) => {
                planning_item_id, item_id, challan_no, party_name,
                material, production_time, dipping_qty, kettle_temperature,
                ms_weight, gi_weight, zinc_percentage, production_weight,
-               c1, c2, c3, c4, c5, avg_coating, row_type, created_by)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?)`,
+               c1, c2, c3, c4, c5, avg_coating, row_type, created_by,
+               zinc_stock_deducted_kg, contractor_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?, ?, ?)`,
             [
               activeShift.id,
               activeShift.shift_date,
@@ -434,9 +456,17 @@ const saveProductionEntry = async (req, res) => {
               c5 || null,
               avgCoating,
               req.user.id,
+              zincStockKg,
+              contractorId,
             ],
           );
           savedEntryId = result.insertId;
+          await applyProductionZinc(connection, {
+            entryId: savedEntryId,
+            srNo: savedSrNo,
+            actorUserId: req.user.id,
+            nextKg: zincStockKg,
+          });
           action = "created";
         }
 
@@ -455,6 +485,7 @@ const saveProductionEntry = async (req, res) => {
           shift_name: activeShift.shift_name,
           sr_no: savedSrNo,
         });
+        io.emit("zinc_stock_updated", { action: "production_updated" });
         io.emit("production_planning_updated", {
           action: "progress_updated",
           id: planningId,
@@ -492,6 +523,7 @@ const saveProductionEntry = async (req, res) => {
           message: `Production entry ${action} successfully`,
           data: {
             production_id: savedEntryId,
+            contractor_id: contractorId,
             sr_no: savedSrNo,
             planning_id: planningId,
             planning_item_id: planningItemId,
@@ -808,6 +840,7 @@ const getProductions = async (req, res) => {
     let query = `
       SELECT 
         production_entries.*,
+        contractor.name AS contractor_name,
         creator.name AS created_by_name,
         updater.name AS updated_by_name,
         CASE
@@ -822,6 +855,7 @@ const getProductions = async (req, res) => {
         active_grant.user_id AS editable_user_id,
         grant_user.name AS editable_user_name
       FROM production_entries
+      LEFT JOIN contractors AS contractor ON contractor.id = production_entries.contractor_id
       LEFT JOIN users AS creator ON creator.id = production_entries.created_by
       LEFT JOIN users AS updater ON updater.id = production_entries.updated_by
       LEFT JOIN production_edit_grants active_grant
@@ -876,9 +910,10 @@ const getProductions = async (req, res) => {
       data: rows,
     });
   } catch (error) {
-    return res.status(500).json({
+    return res.status(error.status || 500).json({
       success: false,
-      message: "Server error",
+      code: error.code,
+      message: error.status ? error.message : "Server error",
     });
   }
 };
@@ -891,9 +926,11 @@ const getProductionById = async (req, res) => {
       `
       SELECT 
         production_entries.*,
+        contractor.name AS contractor_name,
         creator.name AS created_by_name,
         updater.name AS updated_by_name
       FROM production_entries
+      LEFT JOIN contractors AS contractor ON contractor.id = production_entries.contractor_id
       LEFT JOIN users AS creator ON creator.id = production_entries.created_by
       LEFT JOIN users AS updater ON updater.id = production_entries.updated_by
       WHERE production_entries.id = ?
@@ -937,7 +974,8 @@ const deleteProduction = async (req, res) => {
     await connection.beginTransaction();
     transactionStarted = true;
     const [entryRows] = await connection.query(
-      `SELECT planning_id, planning_item_id, challan_no
+      `SELECT planning_id, planning_item_id, challan_no, sr_no,
+              COALESCE(zinc_stock_deducted_kg, 0) AS zinc_stock_deducted_kg
        FROM production_entries WHERE id = ? FOR UPDATE`,
       [id],
     );
@@ -950,6 +988,13 @@ const deleteProduction = async (req, res) => {
       });
     }
     const entry = entryRows[0];
+    await applyProductionZinc(connection, {
+      entryId: id,
+      srNo: entry.sr_no,
+      actorUserId: req.user.id,
+      previousKg: entry.zinc_stock_deducted_kg,
+      nextKg: 0,
+    });
     await connection.query(
       `
       DELETE FROM production_entries
@@ -974,6 +1019,7 @@ const deleteProduction = async (req, res) => {
       action: "recalculated",
       id: entry.planning_id,
     });
+    io.emit("zinc_stock_updated", { action: "production_deleted" });
 
     return res.json({
       success: true,
@@ -982,9 +1028,10 @@ const deleteProduction = async (req, res) => {
   } catch (error) {
     if (transactionStarted && connection) await connection.rollback();
     console.error("deleteProduction:", error);
-    return res.status(500).json({
+    return res.status(error.status || 500).json({
       success: false,
-      message: "Server error",
+      code: error.code,
+      message: error.status ? error.message : "Server error",
     });
   } finally {
     connection?.release();
@@ -1066,6 +1113,7 @@ const updateProductionById = async (req, res) => {
   const zinc = calculateZincPercentage(next.ms_weight, next.gi_weight);
   const weight = calculateProductionWeight(qty, next.ms_weight);
   const coating = calculateAvgCoating([next.c1, next.c2, next.c3, next.c4, next.c5]);
+  const zincStockKg = calculateProductionZincKg(next);
 
   if (current.planning_item_id) {
     const [limitRows] = await db.query(
@@ -1101,18 +1149,27 @@ const updateProductionById = async (req, res) => {
     await connection.beginTransaction();
     await connection.query(
       `UPDATE production_entries SET production_time=?, dipping_qty=?, kettle_temperature=?, ms_weight=?, gi_weight=?,
-       zinc_percentage=?, production_weight=?, c1=?, c2=?, c3=?, c4=?, c5=?, avg_coating=?, updated_by=?
+       zinc_percentage=?, production_weight=?, c1=?, c2=?, c3=?, c4=?, c5=?, avg_coating=?, updated_by=?,
+       zinc_stock_deducted_kg=?
        WHERE id=?`,
       [next.production_time || null, qty, next.kettle_temperature || null,
        next.ms_weight || null, next.gi_weight || null, zinc, weight,
        next.c1 || null, next.c2 || null, next.c3 || null, next.c4 || null,
-       next.c5 || null, coating, req.user.id, entryId],
+       next.c5 || null, coating, req.user.id, zincStockKg, entryId],
     );
+    await applyProductionZinc(connection, {
+      entryId,
+      srNo: current.sr_no,
+      actorUserId: req.user.id,
+      previousKg: current.zinc_stock_deducted_kg,
+      nextKg: zincStockKg,
+    });
     const progress = current.planning_id
       ? await recalculatePlanningProgress(connection, current.planning_id)
       : null;
     await connection.commit();
     req.app.get("io")?.emit("production_updated", { action: "history_updated", production_id: entryId });
+    req.app.get("io")?.emit("zinc_stock_updated", { action: "production_updated" });
     notifyZincSafely({ entryId });
     if (progress?.status === "completed") {
       notifyProductionFlowCompletion({ planningId: current.planning_id }).catch(
@@ -1123,7 +1180,11 @@ const updateProductionById = async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error("updateProductionById:", error);
-    return res.status(500).json({ success: false, message: "Could not update production entry" });
+    return res.status(error.status || 500).json({
+      success: false,
+      code: error.code,
+      message: error.status ? error.message : "Could not update production entry",
+    });
   } finally {
     connection.release();
   }
@@ -1131,35 +1192,63 @@ const updateProductionById = async (req, res) => {
 
 const getProductionPreference = async (req, res) => {
   const [rows] = await db.query(
-    `SELECT upp.default_planning_id, pp.challan_no, pp.party_name, pp.material_description,
-            pp.planned_qty, pp.completed_qty, (pp.planned_qty-pp.completed_qty) remaining_qty
-     FROM user_production_preferences upp
-     LEFT JOIN production_planning pp ON pp.id=upp.default_planning_id AND pp.deleted_at IS NULL
-     WHERE upp.user_id=? LIMIT 1`,
+    'SELECT default_planning_id, default_planning_item_id, default_contractor_id FROM user_production_preferences WHERE user_id = ?',
     [req.user.id],
   );
-  return res.json({ success: true, data: rows[0] || { default_planning_id: null } });
+  return res.json({ success: true, data: rows[0] || {
+    default_planning_id: null, default_planning_item_id: null, default_contractor_id: null,
+  } });
 };
 
 const setProductionPreference = async (req, res) => {
-  const planningId = req.body.planning_id == null ? null : Number(req.body.planning_id);
-  if (planningId) {
-    const [plans] = await db.query(
-      "SELECT id FROM production_planning WHERE id=? AND deleted_at IS NULL AND status='pending' LIMIT 1",
-      [planningId],
-    );
-    if (!plans.length) return res.status(404).json({ success: false, message: "Available planning challan not found" });
+  const body = req.body || {};
+  const has = key => Object.prototype.hasOwnProperty.call(body, key);
+  if (!['planning_item_id', 'planning_id', 'contractor_id'].some(has)) {
+    return res.status(400).json({ success: false, message: 'Choose a default to update.' });
   }
-  await db.query(
-    `INSERT INTO user_production_preferences (user_id, default_planning_id) VALUES (?, ?)
-     ON DUPLICATE KEY UPDATE default_planning_id=VALUES(default_planning_id), updated_at=CURRENT_TIMESTAMP`,
-    [req.user.id, planningId],
-  );
-  req.app.get("io")?.to(`user:${req.user.id}`).emit(
-    "production_preference_updated",
-    { user_id: req.user.id, default_planning_id: planningId },
-  );
-  return res.json({ success: true, message: planningId ? "Default challan saved" : "Default challan removed" });
+  for (const key of ['planning_item_id', 'planning_id', 'contractor_id']) {
+    if (has(key) && body[key] !== null &&
+        (!['number', 'string'].includes(typeof body[key]) || !Number.isSafeInteger(Number(body[key])) || Number(body[key]) <= 0)) {
+      return res.status(400).json({ success: false, message: 'Invalid default selection.' });
+    }
+  }
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const changes = {};
+    if (has('planning_item_id') || has('planning_id')) {
+      let item = null;
+      if (body.planning_item_id != null || (!has('planning_item_id') && body.planning_id != null)) {
+        const byItem = has('planning_item_id');
+        const [items] = await connection.query(
+          `SELECT ppi.id, ppi.planning_id FROM production_planning_items ppi
+           JOIN production_planning pp ON pp.id = ppi.planning_id
+           WHERE ${byItem ? 'ppi.id' : 'pp.id'} = ? AND pp.deleted_at IS NULL
+             AND pp.status = 'pending' AND ppi.status = 'pending'
+             AND ppi.planned_qty > ppi.completed_qty LOCK IN SHARE MODE`,
+          [Number(byItem ? body.planning_item_id : body.planning_id)],
+        );
+        if (items.length !== 1) throw Object.assign(new Error('Select one available challan/material item.'), { status: 409 });
+        item = items[0];
+      }
+      changes.default_planning_id = item ? Number(item.planning_id) : null;
+      changes.default_planning_item_id = item ? Number(item.id) : null;
+    }
+    if (has('contractor_id')) changes.default_contractor_id = await validateContractor(connection, body.contractor_id);
+    const columns = Object.keys(changes); // Only the fixed names above can enter SQL.
+    await connection.query(
+      `INSERT INTO user_production_preferences (user_id, ${columns.join(', ')})
+       VALUES (?, ${columns.map(() => '?').join(', ')})
+       ON DUPLICATE KEY UPDATE ${columns.map(column => column + '=VALUES(' + column + ')').join(', ')}, updated_at=CURRENT_TIMESTAMP`,
+      [req.user.id, ...Object.values(changes)],
+    );
+    await connection.commit();
+    req.app.get('io')?.to(`user:${req.user.id}`).emit('production_preference_updated', { user_id: req.user.id });
+    return res.json({ success: true, message: 'Production default updated', data: changes });
+  } catch (error) {
+    await connection.rollback();
+    return res.status(error.status || 500).json({ success: false, message: error.status ? error.message : 'Could not save production default.' });
+  } finally { connection.release(); }
 };
 
 module.exports = {

@@ -1,0 +1,10 @@
+const router = require('express').Router();
+const auth = require('../middleware/authMiddleware');
+const access = require('../middleware/roleMiddleware');
+const { getZincStock, getZincMovements, downloadZincMovementsPdf, saveZincMovement } = require('../controllers/zincStockController');
+router.use(auth, access([], 'zinc_stock.view'));
+router.get('/', getZincStock);
+router.get('/movements', getZincMovements);
+router.get('/movements/pdf', downloadZincMovementsPdf);
+router.post('/movements', access([], 'zinc_stock.manage'), saveZincMovement);
+module.exports = router;
