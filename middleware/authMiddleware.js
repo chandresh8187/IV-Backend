@@ -18,11 +18,12 @@ const authMiddleware = async (req, res, next) => {
     decoded = jwt.verify(token, process.env.JWT_SECRET, {
       issuer: "iv-api",
       audience: "iv-app",
+      ignoreExpiration: true,
     });
   } catch {
     return res.status(401).json({
       success: false,
-      message: "Invalid or expired token",
+      message: "Invalid token",
     });
   }
 

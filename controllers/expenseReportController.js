@@ -59,16 +59,23 @@ const getExpenseSettings = async (req, res) => {
 };
 
 const saveExpenseSettings = async (req, res) => {
+  let connection;
   try {
     const settings = validateExpenseSettings(req.body || {});
     const columns = SETTING_FIELDS.join(', ');
     const placeholders = SETTING_FIELDS.map(() => '?').join(', ');
     const updates = SETTING_FIELDS.map(field => `${field} = VALUES(${field})`).join(', ');
-    await db.query(`INSERT INTO expense_settings (id, ${columns}, updated_by) VALUES (1, ${placeholders}, ?)
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const values = SETTING_FIELDS.map(field => settings[field]);
+    await connection.query(`INSERT INTO expense_settings (id, ${columns}, updated_by) VALUES (1, ${placeholders}, ?)
       ON DUPLICATE KEY UPDATE ${updates}, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP`, [...SETTING_FIELDS.map(field => settings[field]), req.user.id]);
+    await connection.query(`INSERT INTO expense_settings_history (${columns}, actor_user_id) VALUES (${placeholders}, ?)`, [...values, req.user.id]);
+    await connection.commit();
     req.app.get('io')?.emit('expense_report_updated', {});
     return res.json({ success: true, message: 'Expense settings updated.', data: settings });
-  } catch (error) { return sendError(res, error); }
+  } catch (error) { if (connection) await connection.rollback().catch(() => {}); return sendError(res, error); }
+  finally { connection?.release(); }
 };
 
 const downloadExpenseReportPdf = async (req, res) => {

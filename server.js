@@ -128,6 +128,7 @@ io.use((socket, next) => {
     socket.user = jwt.verify(token, process.env.JWT_SECRET, {
       issuer: "iv-api",
       audience: "iv-app",
+      ignoreExpiration: true,
     });
   } catch {
     return next(new Error("Invalid socket authentication"));
@@ -160,6 +161,7 @@ app.use("/api/shifts", require("./routes/shiftRoutes"));
 app.use('/api/contractors', require('./routes/contractorRoutes'));
 app.use('/api/zinc-stock', require('./routes/zincStockRoutes'));
 app.use('/api/expense-report', require('./routes/expenseReportRoutes'));
+app.use('/api/monthly-reports', require('./routes/monthlyReportRoutes'));
 app.use("/api/plant", require("./routes/plantStatusRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));

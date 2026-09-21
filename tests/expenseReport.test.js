@@ -42,7 +42,9 @@ test('expense settings require all non-negative currency values', () => {
   assert.throws(() => validateExpenseSettings({ ...settings, acid_expense: '' }), /every expense/);
 });
 
-test('expense settings migration is additive and safe', () => {
-  const sql = fs.readFileSync(path.join(__dirname, '../migrations/versioned/20260921000400_create_expense_settings.sql'), 'utf8');
-  assert.doesNotThrow(() => validateMigrationSql(sql));
+test('expense settings migrations are additive and safe', () => {
+  for (const name of ['20260921000400_create_expense_settings.sql', '20260921000500_create_expense_settings_history.sql']) {
+    const sql = fs.readFileSync(path.join(__dirname, '../migrations/versioned', name), 'utf8');
+    assert.doesNotThrow(() => validateMigrationSql(sql));
+  }
 });

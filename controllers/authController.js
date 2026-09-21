@@ -11,7 +11,6 @@ const generateToken = (user) => {
     },
     process.env.JWT_SECRET,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || "7d",
       issuer: "iv-api",
       audience: "iv-app",
     },
@@ -274,6 +273,7 @@ const registerUser = async (req, res) => {
 };
 
 module.exports = {
+  generateToken,
   loginUser,
   registerUser,
   getMyAccess,

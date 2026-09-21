@@ -16,6 +16,7 @@ const readRole = (req) => {
       jwt.verify(token, process.env.JWT_SECRET, {
         issuer: "iv-api",
         audience: "iv-app",
+        ignoreExpiration: true,
       })?.role || "",
     )
       .toLowerCase()

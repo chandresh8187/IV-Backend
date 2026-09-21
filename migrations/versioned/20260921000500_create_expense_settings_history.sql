@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS expense_settings_history (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  rate_per_ton DECIMAL(14,2) NOT NULL,
+  staff_salary DECIMAL(14,2) NOT NULL,
+  hardware_expense DECIMAL(14,2) NOT NULL,
+  maintenance_expense DECIMAL(14,2) NOT NULL,
+  zinc_spray_expense DECIMAL(14,2) NOT NULL,
+  electricity_per_day DECIMAL(14,2) NOT NULL,
+  gas_bottle_rate DECIMAL(14,2) NOT NULL,
+  chemicals_per_day DECIMAL(14,2) NOT NULL,
+  ms_wire_per_day DECIMAL(14,2) NOT NULL,
+  rent_expense DECIMAL(14,2) NOT NULL,
+  acid_expense DECIMAL(14,2) NOT NULL,
+  crane_expense DECIMAL(14,2) NOT NULL,
+  other_expense DECIMAL(14,2) NOT NULL,
+  actor_user_id INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_expense_settings_history_created (created_at, id),
+  CONSTRAINT fk_expense_settings_history_user FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
