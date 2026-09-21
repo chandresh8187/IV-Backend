@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS zinc_byproduct_transactions (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  transaction_date DATE NOT NULL,
+  ash_weight_kg DECIMAL(14,3) NOT NULL DEFAULT 0,
+  ash_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+  ash_base_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+  ash_gst_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+  dross_weight_kg DECIMAL(14,3) NOT NULL DEFAULT 0,
+  dross_rate DECIMAL(12,2) NOT NULL DEFAULT 0,
+  dross_base_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+  dross_gst_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+  total_with_gst DECIMAL(14,2) NOT NULL,
+  zinc_rate_snapshot DECIMAL(12,2) NOT NULL,
+  recovered_zinc_kg DECIMAL(14,3) NOT NULL,
+  note VARCHAR(255) NOT NULL DEFAULT '',
+  actor_user_id INT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_zinc_byproduct_date (transaction_date, id),
+  CONSTRAINT fk_zinc_byproduct_actor FOREIGN KEY (actor_user_id) REFERENCES users(id)
+) ENGINE=InnoDB;

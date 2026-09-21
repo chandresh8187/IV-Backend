@@ -6,20 +6,20 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const service = require('../services/zincStockService');
 const { validateMigrationSql } = require('../scripts/migrationSafety');
-const initial = { initialized: 1, plant_kg: 9989, kettle_kg: 0, kg_per_mm: 35.65, revision: 1 };
+const initial = { initialized: 1, plant_kg: 9989, kettle_kg: 0, kg_per_mm: 35.7, revision: 1 };
 const body = overrides => ({ action: 'transfer', amount_kg: 1000, expected_revision: 1, request_id: 'zinc_test_request_0001', ...overrides });
 
-test('9989 kg plant minus 1000 kg transfer leaves 8989 kg and raises kettle level by 28.1 mm', () => {
+test('9989 kg plant minus 1000 kg transfer leaves 8989 kg and raises kettle level by 28.0 mm', () => {
   const result = service.applyMovement(initial, service.normalizeMovement(body()));
   assert.equal(result.plant_kg, 8989);
   assert.equal(result.kettle_kg, 1000);
   assert.equal(result.plant_kg + result.kettle_kg, 9989);
   const snapshot = service.serializeStock(result);
-  assert.equal(snapshot.level_mm.toFixed(1), '28.1');
-  assert.equal(snapshot.capacity_kg, 44562.5);
+  assert.equal(snapshot.level_mm.toFixed(1), '28.0');
+  assert.equal(snapshot.capacity_kg, 44625);
 });
 test('opening stock is independent and receipts do not change kettle', () => {
-  const movement = service.normalizeMovement(body({ action: 'initialize', expected_revision: 0, plant_kg: 9989, kettle_kg: 30000, kg_per_mm: 35.65 }));
+  const movement = service.normalizeMovement(body({ action: 'initialize', expected_revision: 0, plant_kg: 9989, kettle_kg: 30000, kg_per_mm: 35.7 }));
   const opened = service.applyMovement({ revision: 0, initialized: 0, plant_kg: 0, kettle_kg: 0 }, movement);
   assert.equal(opened.plant_kg, 9989);
   assert.equal(opened.kettle_kg, 30000);
@@ -32,12 +32,12 @@ test('adjustment replaces both balances after initialization and keeps density',
     action: 'adjust',
     plant_kg: 8500,
     kettle_kg: 16500,
-    kg_per_mm: 35.65,
+    kg_per_mm: 35.7,
   }));
   const changed = service.applyMovement(initial, movement);
   assert.equal(changed.plant_kg, 8500);
   assert.equal(changed.kettle_kg, 16500);
-  assert.equal(service.serializeStock(changed).level_mm.toFixed(1), '462.8');
+  assert.equal(service.serializeStock(changed).level_mm.toFixed(1), '462.2');
   assert.equal(changed.revision, 2);
 });
 test('adjustment requires initialized stock and respects kettle capacity', () => {
@@ -45,7 +45,7 @@ test('adjustment requires initialized stock and respects kettle capacity', () =>
     action: 'adjust',
     plant_kg: 1,
     kettle_kg: 1,
-    kg_per_mm: 35.65,
+    kg_per_mm: 35.7,
   }));
   assert.throws(
     () => service.applyMovement({ ...initial, initialized: 0 }, valid),
@@ -53,15 +53,15 @@ test('adjustment requires initialized stock and respects kettle capacity', () =>
   );
   assert.throws(
     () => service.applyMovement(initial, service.normalizeMovement(body({
-      action: 'adjust', plant_kg: 1, kettle_kg: 44562.501, kg_per_mm: 35.65,
+      action: 'adjust', plant_kg: 1, kettle_kg: 44625.001, kg_per_mm: 35.7,
     }))),
     /tank volume/,
   );
 });
 test('decimal kg arithmetic is exact to a gram and volume limit is enforced', () => {
-  const result = service.applyMovement({ ...initial, plant_kg: 0.3, kettle_kg: 44562.4 }, service.normalizeMovement(body({ amount_kg: '0.1' })));
+  const result = service.applyMovement({ ...initial, plant_kg: 0.3, kettle_kg: 44624.9 }, service.normalizeMovement(body({ amount_kg: '0.1' })));
   assert.equal(result.plant_kg, 0.2);
-  assert.equal(result.kettle_kg, 44562.5);
+  assert.equal(result.kettle_kg, 44625);
   assert.equal(service.serializeStock(result).level_mm, 1250);
   assert.throws(() => service.applyMovement(result, service.normalizeMovement(body({ expected_revision: 2, amount_kg: 0.001 }))), /tank volume/);
 });
@@ -69,7 +69,7 @@ test('rejects insufficient stock, stale revisions and uninitialized or repeated 
   assert.throws(() => service.applyMovement(initial, service.normalizeMovement(body({ amount_kg: 9990 }))), /not enough/);
   assert.throws(() => service.applyMovement(initial, service.normalizeMovement(body({ expected_revision: 0 }))), /changed/);
   assert.throws(() => service.applyMovement({ ...initial, initialized: 0 }, service.normalizeMovement(body())), /opening stock/);
-  assert.throws(() => service.applyMovement(initial, service.normalizeMovement(body({ action: 'initialize', plant_kg: 1, kettle_kg: 1, kg_per_mm: 35.65 }))), /already/);
+  assert.throws(() => service.applyMovement(initial, service.normalizeMovement(body({ action: 'initialize', plant_kg: 1, kettle_kg: 1, kg_per_mm: 35.7 }))), /already/);
   assert.equal(service.serializeStock().level_mm, null);
 });
 test('rejects malformed weights and supports explicit zero opening stock', () => {
@@ -108,7 +108,13 @@ function controllerFixture({ failLedger = false } = {}) {
     rollback: async () => { working = null; staged = []; calls.push('ROLLBACK'); }, release() {} };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../controllers/zincStockController.js'), 'utf8'), {
-    module, console, require: name => name === 'crypto' ? crypto : name === '../config/db' ? { getConnection: async () => conn, query } : service,
+    module, console, require: name => name === 'crypto'
+      ? crypto
+      : name === '../config/db'
+        ? { getConnection: async () => conn, query }
+        : name === '../services/permissionService'
+          ? { hasPermission: async () => true }
+          : service,
   });
   const run = async data => {
     const res = { code: 200, status(value) { this.code = value; return this; }, json(value) { this.body = value; return this; } };

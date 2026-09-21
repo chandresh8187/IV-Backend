@@ -1,10 +1,10 @@
-const ZINC_DENSITY_KG_M3 = 7130;
-const ZINC_KG_PER_MM = 35.65;
+const ZINC_DENSITY_KG_M3 = 7140;
+const ZINC_KG_PER_MM = 35.7;
 const TANK = Object.freeze({
   length_m: 5,
   width_m: 1,
   depth_mm: 1250,
-  zinc_density_g_cm3: 7.13,
+  zinc_density_g_cm3: 7.14,
 });
 const MAX_GRAMS = 1000000000000;
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
@@ -39,7 +39,7 @@ function applyMovement(stock, movement) {
   if (Number(stock.revision) !== movement.expected_revision) throw fail('Stock changed on another device. Refresh and review the balances before saving again.', 409);
   let plant = Math.round(Number(stock.plant_kg) * 1000);
   let kettle = Math.round(Number(stock.kettle_kg) * 1000);
-  // The configured tank calculation always uses zinc density 7.13 g/cm³.
+  // The configured tank calculation always uses zinc density 7.14 g/cm³.
   // Ignore legacy stored conversion values so existing stock is recalculated too.
   let kgPerMm = ZINC_KG_PER_MM;
   if (movement.action === 'initialize') {
@@ -73,6 +73,7 @@ function serializeStock(stock) {
   return {
     initialized, plant_kg: Number(stock?.plant_kg || 0), kettle_kg: kettle,
     revision: Number(stock?.revision || 0), kg_per_mm: kgPerMm,
+    current_zinc_rate: stock?.current_zinc_rate == null ? null : Number(stock.current_zinc_rate),
     tank: TANK, level_mm: initialized ? kettle / kgPerMm : null,
     capacity_kg: initialized ? kgPerMm * TANK.depth_mm : null,
     fill_percent: initialized ? kettle / (kgPerMm * TANK.depth_mm) * 100 : null,

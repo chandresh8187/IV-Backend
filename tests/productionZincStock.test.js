@@ -28,7 +28,7 @@ test('production use deducts kettle stock and writes an auditable movement', asy
     nextKg: 125.5,
   });
   const update = calls.find(call => call.sql.includes('UPDATE zinc_stock SET kettle_kg'));
-  assert.deepEqual(update.params, [874.5, 35.65, 5]);
+  assert.deepEqual(update.params, [874.5, 35.7, 5]);
   const movement = calls.find(call => call.sql.includes('INSERT INTO zinc_stock_movements'));
   assert.equal(movement.params[2], 'production_use');
   assert.equal(movement.params[3], 125.5);

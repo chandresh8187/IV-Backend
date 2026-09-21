@@ -3,8 +3,15 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
-  { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and movements.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
-  { key: 'zinc_stock.manage', group: 'Zinc Stock', label: 'Manage zinc stock', description: 'Set or change balances, receive zinc and transfer plant stock to the kettle.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and transaction history.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'zinc_stock.receive', group: 'Zinc Stock', label: 'Receive zinc in plant', description: 'Add purchased or received zinc to plant stock.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'zinc_stock.transfer', group: 'Zinc Stock', label: 'Add zinc to kettle', description: 'Transfer zinc from plant stock to the kettle, including from Live Production.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'zinc_stock.adjust', group: 'Zinc Stock', label: 'Set or correct zinc balances', description: 'Set opening stock or replace verified plant and kettle balances.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'zinc_stock.report', group: 'Zinc Stock', label: 'Generate zinc PDF report', description: 'Generate and share the complete zinc transaction PDF.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'zinc_byproduct.manage', group: 'Zinc Stock', label: 'Manage ash and dross', description: 'Set the zinc rate and record ash and dross sale recovery.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'expense_report.view', group: 'Expense Report', label: 'View expense report', description: 'View monthly production expenses, zinc totals, and running plant cost.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'expense_report.settings', group: 'Expense Report', label: 'Manage expense settings', description: 'Set salary, utilities, materials, rent, and other production expenses.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'expense_report.report', group: 'Expense Report', label: 'Generate expense PDF', description: 'Generate and share the monthly expense report PDF.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'rate_calculator.view', group: 'Production', label: 'Use rate calculator', description: 'Calculate zinc consumption cost and final production rate.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'contractors.view', group: 'Contractors', label: 'View contractor production', description: 'View contractor shift assignments and production totals.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'contractors.manage', group: 'Contractors', label: 'Manage contractor assignments', description: 'Add contractors and configure repeating Day/Night assignments.', defaultRoles: ['superadmin', 'plant_manager'] },

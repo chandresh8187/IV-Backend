@@ -132,6 +132,24 @@ const getDashboardData = async (req, res) => {
         getTotalSummary(monthWhere, [shiftInfo.month, shiftInfo.year]),
       ]);
 
+    const [recoveryRows] = await db.query(
+      `SELECT ROUND(COALESCE(SUM(recovered_zinc_kg), 0), 3) recovered_zinc_kg,
+              ROUND(COALESCE(SUM(total_with_gst), 0), 2) recovery_value_with_gst
+       FROM zinc_byproduct_transactions
+       WHERE MONTH(transaction_date) = ? AND YEAR(transaction_date) = ?`,
+      [shiftInfo.month, shiftInfo.year],
+    );
+    const recoveredZincKg = Number(recoveryRows[0]?.recovered_zinc_kg) || 0;
+    const grossZincUsed = Number(monthTotalSummary.zink_used) || 0;
+    const netZincUsed = Math.max(0, Number((grossZincUsed - recoveredZincKg).toFixed(3)));
+    monthTotalSummary.gross_zinc_used = grossZincUsed;
+    monthTotalSummary.recovered_zinc_kg = recoveredZincKg;
+    monthTotalSummary.recovery_value_with_gst = Number(recoveryRows[0]?.recovery_value_with_gst) || 0;
+    monthTotalSummary.zink_used = netZincUsed;
+    monthTotalSummary.zinc_consumption = monthTotalSummary.total_ms_production_kg > 0
+      ? Number(((netZincUsed / monthTotalSummary.total_ms_production_kg) * 100).toFixed(2))
+      : 0;
+
     const [monthlyRows] = await db.query(
       `SELECT DATE_FORMAT(production_date,'%Y-%m-%d') production_date,
               COALESCE(SUM(material_qty),0) total_dipping_qty,

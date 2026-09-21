@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('../config/db');
 const { normalizeMovement, applyMovement, serializeStock } = require('../services/zincStockService');
 const { generateZincStockPdf } = require('../services/pdf/zincStockPdfGenerator');
+const { hasPermission } = require('../services/permissionService');
 
 const sendError = (res, error) => {
   if (!error.status) console.error('Zinc stock:', error);
@@ -54,6 +55,19 @@ const saveZincMovement = async (req, res) => {
   let transaction = false;
   try {
     const movement = normalizeMovement(req.body || {});
+    const permissionKey = movement.action === 'receive'
+      ? 'zinc_stock.receive'
+      : movement.action === 'transfer'
+        ? 'zinc_stock.transfer'
+        : 'zinc_stock.adjust';
+    const allowed = await hasPermission({
+      userId: req.user.id,
+      role: req.user.role,
+      permissionKey,
+    });
+    if (!allowed) {
+      throw Object.assign(new Error('You do not have access to perform this zinc stock operation.'), { status: 403 });
+    }
     const hash = crypto.createHash('sha256').update(JSON.stringify({ ...movement, actor: req.user.id })).digest('hex');
     connection = await db.getConnection();
     await connection.beginTransaction();
