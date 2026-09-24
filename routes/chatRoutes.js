@@ -1,0 +1,11 @@
+const router = require('express').Router();
+const auth = require('../middleware/authMiddleware');
+const access = require('../middleware/roleMiddleware');
+const { getChat, markChatRead, createMessage, updateMessage, deleteMessage } = require('../controllers/chatController');
+router.use(auth, access([], 'chat.view'));
+router.get('/', getChat);
+router.post('/read', markChatRead);
+router.post('/messages', createMessage);
+router.put('/messages/:id', updateMessage);
+router.delete('/messages/:id', deleteMessage);
+module.exports = router;

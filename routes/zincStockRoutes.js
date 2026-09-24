@@ -1,15 +1,15 @@
 const router = require('express').Router();
 const auth = require('../middleware/authMiddleware');
 const access = require('../middleware/roleMiddleware');
-const { getZincStock, getZincMovements, downloadZincMovementsPdf, saveZincMovement } = require('../controllers/zincStockController');
-const { setZincRate, createByproduct, getByproducts, downloadByproductsPdf } = require('../controllers/zincByproductController');
+const { getZincStock, getAverageZincRate, getZincMovements, downloadZincMovementsPdf, saveZincMovement } = require('../controllers/zincStockController');
+const { createByproduct, getByproducts, downloadByproductsPdf } = require('../controllers/zincByproductController');
 router.use(auth);
 router.get('/', access([], 'zinc_stock.view'), getZincStock);
+router.get('/average-rate', access([], 'rate_calculator.view'), getAverageZincRate);
 router.get('/transfer-context', access([], 'zinc_stock.transfer'), getZincStock);
 router.get('/movements', access([], 'zinc_stock.view'), getZincMovements);
 router.get('/movements/pdf', access([], 'zinc_stock.report'), downloadZincMovementsPdf);
 router.post('/movements', saveZincMovement);
-router.put('/rate', access([], 'zinc_byproduct.manage'), setZincRate);
 router.get('/byproducts', access([], 'zinc_stock.view'), getByproducts);
 router.post('/byproducts', access([], 'zinc_byproduct.manage'), createByproduct);
 router.get('/byproducts/pdf', access([], 'zinc_stock.report'), downloadByproductsPdf);

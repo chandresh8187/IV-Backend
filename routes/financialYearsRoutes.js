@@ -15,9 +15,9 @@ const router = express.Router();
 
 router.get("/", authMiddleware, getFinancialYears);
 router.get("/current", authMiddleware, getCurrentFinancialYear);
-router.put('/:id/current', authMiddleware, roleMiddleware(['superadmin'], 'settings.manage'), setCurrentFinancialYear);
-router.post("/", authMiddleware, createFinancialYear);
-router.put("/:id", authMiddleware, updateFinancialYear);
-router.delete("/:id", authMiddleware, deleteFinancialYear);
+router.put('/:id/current', authMiddleware, roleMiddleware([], 'financial_years.manage'), setCurrentFinancialYear);
+router.post("/", authMiddleware, roleMiddleware([], "financial_years.manage"), createFinancialYear);
+router.put("/:id", authMiddleware, roleMiddleware([], "financial_years.manage"), updateFinancialYear);
+router.delete("/:id", authMiddleware, roleMiddleware([], "financial_years.manage"), deleteFinancialYear);
 
 module.exports = router;

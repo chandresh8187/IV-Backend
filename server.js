@@ -9,6 +9,8 @@ const path = require("path");
 const jwt = require("jsonwebtoken");
 const { rateLimit } = require("express-rate-limit");
 const { Server } = require("socket.io");
+const { connectUser, disconnectUser, getOnlineUserIds, enterChat, leaveChat } = require('./services/chatPresenceService');
+const { hasPermission } = require('./services/permissionService');
 
 const db = require("./config/db");
 const maintenanceModeMiddleware = require("./middleware/maintenanceModeMiddleware");
@@ -135,19 +137,42 @@ io.use((socket, next) => {
   }
 
   db.query(
-    "SELECT id FROM users WHERE id = ? AND status = 'active' LIMIT 1",
+    "SELECT id, role FROM users WHERE id = ? AND status = 'active' LIMIT 1",
     [socket.user.id],
   )
     .then(([users]) =>
       users.length
-        ? next()
+        ? (socket.user.role = users[0].role, next())
         : next(new Error("Socket user is not active")),
     )
     .catch(() => next(new Error("Socket authentication unavailable")));
 });
 
-io.on("connection", (socket) => {
-  if (socket.user?.id) socket.join(`user:${socket.user.id}`);
+io.on("connection", async (socket) => {
+  if (socket.user?.id) {
+    socket.join(`user:${socket.user.id}`);
+    const chatAllowed = await hasPermission({ userId: socket.user.id, role: socket.user.role, permissionKey: 'chat.view' }).catch(() => false);
+    if (chatAllowed) {
+      socket.join('chat');
+      connectUser(socket.user.id);
+      let chatIsActive = false;
+      socket.on('chat_active', ({ active } = {}) => {
+        if (active && !chatIsActive) {
+          enterChat(socket.user.id);
+          chatIsActive = true;
+        } else if (!active && chatIsActive) {
+          leaveChat(socket.user.id);
+          chatIsActive = false;
+        }
+      });
+      io.to('chat').emit('chat_presence_updated', { online_user_ids: getOnlineUserIds() });
+      socket.on('disconnect', () => {
+        if (chatIsActive) leaveChat(socket.user.id);
+        disconnectUser(socket.user.id);
+        io.to('chat').emit('chat_presence_updated', { online_user_ids: getOnlineUserIds() });
+      });
+    }
+  }
   socket.emit("socket_connected", {
     success: true,
     user_id: socket.user?.id || null,
@@ -162,6 +187,8 @@ app.use('/api/contractors', require('./routes/contractorRoutes'));
 app.use('/api/zinc-stock', require('./routes/zincStockRoutes'));
 app.use('/api/expense-report', require('./routes/expenseReportRoutes'));
 app.use('/api/monthly-reports', require('./routes/monthlyReportRoutes'));
+app.use('/api/chemical-checks', require('./routes/chemicalChecksRoutes'));
+app.use('/api/chat', require('./routes/chatRoutes'));
 app.use("/api/plant", require("./routes/plantStatusRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));

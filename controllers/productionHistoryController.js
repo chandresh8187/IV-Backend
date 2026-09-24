@@ -129,7 +129,7 @@ const getHistoryShiftTable = async (req, res) => {
               DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date,
               shift_name, sr_no, production_time, challan_no, party_name, material,
               dipping_qty, kettle_temperature, ms_weight, gi_weight,
-              zinc_percentage, production_weight, c1, c2, c3, c4, c5, avg_coating
+              zinc_percentage, production_cost, production_weight, c1, c2, c3, c4, c5, avg_coating
        FROM production_entries
        WHERE shift_date = ? AND LOWER(shift_name) = ?
          AND COALESCE(row_type, 'entry') = 'entry'

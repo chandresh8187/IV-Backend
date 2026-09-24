@@ -5,7 +5,7 @@ const {
   applyProductionZinc,
 } = require('../services/productionZincStockService');
 const { hasPermission } = require("../services/permissionService");
-const { getCorrectionState, getProductionContext, assertContext, lockProductionContext, canUseShiftCorrection } = require('../services/productionShiftContextService');
+const { getCorrectionState, getProductionContext, assertContext, lockProductionContext } = require('../services/productionShiftContextService');
 const { getPlantStatusRow } = require("./plantStatusController");
 const {
   checkEntryZincNotification,
@@ -16,6 +16,7 @@ const {
 const {
   recalculatePlanningProgress,
 } = require("../services/productionPlanningFlowService");
+const { refreshProductionCost } = require('../services/productionCostService');
 
 const notifyZincSafely = async ({
   entryId,
@@ -147,7 +148,12 @@ const saveProductionEntry = async (req, res) => {
     }
 
     const io = req.app.get("io");
-    const productionContext = await getProductionContext(null, canUseShiftCorrection(req.user));
+    const shiftCorrectionAllowed = await hasPermission({
+      userId: req.user.id,
+      role: req.user.role,
+      permissionKey: 'shifts.correct',
+    });
+    const productionContext = await getProductionContext(null, shiftCorrectionAllowed);
     const activeShift = productionContext.shift;
     assertContext(req.body, productionContext);
     if (productionContext.correction && entry_type !== 'full') {
@@ -474,6 +480,11 @@ const saveProductionEntry = async (req, res) => {
           connection,
           planningId,
         );
+        const productionCost = await refreshProductionCost(connection, {
+          entryId: savedEntryId,
+          shiftDate: activeShift.shift_date,
+          zincPercentage,
+        });
         await connection.commit();
 
         io.emit("production_updated", {
@@ -504,6 +515,7 @@ const saveProductionEntry = async (req, res) => {
             ms_weight,
             gi_weight,
             zinc_percentage: zincPercentage,
+            production_cost: productionCost?.production_cost ?? null,
             target_zinc_percentage: planning.target_zinc_percentage,
           },
         });
@@ -670,6 +682,12 @@ const saveProductionEntry = async (req, res) => {
         ],
       );
 
+      const productionCost = await refreshProductionCost(db, {
+        entryId: existingRow.id,
+        shiftDate: existingRow.shift_date,
+        zincPercentage: existingRow.zinc_percentage,
+      });
+
       await consumeEditGrant(db, activeEditGrantId);
 
       io.emit("production_updated", {
@@ -728,6 +746,12 @@ const saveProductionEntry = async (req, res) => {
         ],
       );
 
+      const productionCost = await refreshProductionCost(db, {
+        entryId: existingRow.id,
+        shiftDate: existingRow.shift_date,
+        zincPercentage,
+      });
+
       await consumeEditGrant(db, activeEditGrantId);
 
       io.emit("production_updated", {
@@ -748,6 +772,7 @@ const saveProductionEntry = async (req, res) => {
         data: {
           zinc_percentage: zincPercentage,
           production_weight: productionWeight,
+          production_cost: productionCost?.production_cost ?? null,
         },
       });
     }
@@ -833,7 +858,10 @@ const getProductions = async (req, res) => {
       permissionKey: "production.manage_all",
     });
     const correction = await getCorrectionState();
-    const canCorrect = canUseShiftCorrection(req.user) && correction.correction_shift_id && await hasPermission({
+    const shiftCorrectionAllowed = await hasPermission({
+      userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct',
+    });
+    const canCorrect = correction.correction_shift_id && shiftCorrectionAllowed && await hasPermission({
       userId: req.user.id, role: req.user.role, permissionKey: 'production.save',
     });
 
@@ -1163,6 +1191,11 @@ const updateProductionById = async (req, res) => {
       actorUserId: req.user.id,
       previousKg: current.zinc_stock_deducted_kg,
       nextKg: zincStockKg,
+    });
+    await refreshProductionCost(connection, {
+      entryId,
+      shiftDate: current.shift_date,
+      zincPercentage: zinc,
     });
     const progress = current.planning_id
       ? await recalculatePlanningProgress(connection, current.planning_id)

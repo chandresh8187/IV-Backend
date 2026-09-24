@@ -5,7 +5,7 @@ const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
 const { getShiftStatus } = require("../controllers/shiftController");
 const { listPreviousShifts, getCorrectionPlanningItems, openCorrection, resumeCurrentShift } = require('../controllers/shiftCorrectionController');
-const correctionManagers = roleMiddleware(['superadmin', 'plant_manager']);
+const correctionManagers = roleMiddleware([], 'shifts.correct');
 
 router.get('/correction/shifts', authMiddleware, correctionManagers, listPreviousShifts);
 router.post('/correction', authMiddleware, correctionManagers, openCorrection);

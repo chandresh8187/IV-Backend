@@ -147,6 +147,7 @@ const generateProductionReport = async (req, res) => {
         pe.ms_weight,
         pe.gi_weight,
         pe.zinc_percentage,
+        pe.production_cost,
         pe.production_weight,
         pe.c1,
         pe.c2,

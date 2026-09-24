@@ -5,13 +5,19 @@ const {
   getShiftSchedule,
 } = require("../services/automaticShiftService");
 const { getPlantStatusRow } = require("./plantStatusController");
-const { getProductionContext, canUseShiftCorrection } = require('../services/productionShiftContextService');
+const { getProductionContext } = require('../services/productionShiftContextService');
+const { hasPermission } = require('../services/permissionService');
 
 const getShiftStatus = async (req, res) => {
   try {
     const schedule = await getShiftSchedule();
     const activeShift = await ensureAutomaticShift();
-    const productionContext = await getProductionContext(activeShift, canUseShiftCorrection(req.user));
+    const shiftCorrectionAllowed = await hasPermission({
+      userId: req.user.id,
+      role: req.user.role,
+      permissionKey: 'shifts.correct',
+    });
+    const productionContext = await getProductionContext(activeShift, shiftCorrectionAllowed);
     const calculated = getCurrentShiftInfo(null, schedule);
     const plantStatus = await getPlantStatusRow();
 

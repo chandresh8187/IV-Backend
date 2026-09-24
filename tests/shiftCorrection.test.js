@@ -69,7 +69,10 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
   const production = load('controllers/productionController.js', {
     '../config/db': db,
     '../services/productionShiftContextService': context,
-    '../services/permissionService': { hasPermission: async () => false },
+    '../services/permissionService': {
+      hasPermission: async ({ permissionKey }) =>
+        permissionKey === 'shifts.correct' ? correction : false,
+    },
     './plantStatusController': { getPlantStatusRow: async () => ({ status: 'running' }) },
     '../utils/checkEntryZincNotification': { checkEntryZincNotification: async () => ({ triggered: false }) },
     '../utils/checkProductionFlowCompletion': { notifyProductionFlowCompletion: async () => null },
@@ -82,6 +85,9 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
         Math.max(0, Number(gi_weight) - Number(ms_weight)) * Number(dipping_qty),
       applyProductionZinc: async () => {},
     },
+    '../services/productionCostService': {
+      refreshProductionCost: async () => ({ production_cost: 0 }),
+    },
   });
   const managers = load('controllers/shiftCorrectionController.js', {
     '../config/db': db, '../services/automaticShiftService': automatic,
@@ -92,7 +98,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
   return { context, production, managers, app, response, writes, events,
     stats: () => ({ commits, rollbacks, autoAssignments }),
     request: overrides => ({ app, user: { id: 4, role: 'supervisor' }, body: {
-      entry_type: 'full', shift_id: correction ? 10 : 20, shift_revision: correction ? 1 : 2,
+      entry_type: 'full', shift_id: correction ? 10 : 20, shift_revision: correction ? 1 : 0,
       entry_id: existing ? 50 : 0, sr_no: 1, planning_item_id: 8,
       dipping_qty: 3, production_time: '22:00:00', ms_weight: 10, gi_weight: 10.5,
       ...overrides,

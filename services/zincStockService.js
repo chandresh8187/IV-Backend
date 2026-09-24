@@ -20,6 +20,17 @@ function grams(value, label, allowZero = false) {
   return result;
 }
 
+function rate(value) {
+  if (!['string', 'number'].includes(typeof value) || !/^\d+(\.\d{1,2})?$/.test(String(value))) {
+    throw fail('Zinc rate must be an amount per kg with up to 2 decimal places.');
+  }
+  const result = Math.round(Number(value) * 100) / 100;
+  if (!Number.isFinite(result) || result <= 0 || result > 1000000) {
+    throw fail('Zinc rate must be greater than zero and within the supported range.');
+  }
+  return result;
+}
+
 function normalizeMovement(body) {
   if (!['initialize', 'adjust', 'receive', 'transfer'].includes(body.action)) throw fail('Select a valid stock action.');
   if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision < 0) throw fail('Refresh stock before saving.');
@@ -31,7 +42,10 @@ function normalizeMovement(body) {
     result.plantGrams = grams(body.plant_kg, 'Plant stock', true);
     result.kettleGrams = grams(body.kettle_kg, 'Kettle stock', true);
     result.kgPerMm = ZINC_KG_PER_MM;
-  } else result.amountGrams = grams(body.amount_kg, 'Zinc amount');
+  } else {
+    result.amountGrams = grams(body.amount_kg, 'Zinc amount');
+    if (body.action === 'receive') result.zincRatePerKg = rate(body.zinc_rate_per_kg);
+  }
   return result;
 }
 
@@ -85,6 +99,7 @@ module.exports = {
   ZINC_DENSITY_KG_M3,
   ZINC_KG_PER_MM,
   grams,
+  rate,
   normalizeMovement,
   applyMovement,
   serializeStock,

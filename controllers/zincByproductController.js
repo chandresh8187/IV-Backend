@@ -10,16 +10,6 @@ const selectSql = `SELECT t.*, DATE_FORMAT(t.transaction_date, '%Y-%m-%d') trans
   DATE_FORMAT(t.created_at, '%Y-%m-%d %H:%i:%s') created_at, u.name actor_name
   FROM zinc_byproduct_transactions t LEFT JOIN users u ON u.id=t.actor_user_id`;
 
-const setZincRate = async (req, res) => {
-  try {
-    const rate = Number(req.body?.zinc_rate);
-    if (!Number.isFinite(rate) || rate <= 0) throw fail('Current zinc rate must be greater than zero.');
-    await db.query('INSERT INTO zinc_stock (id, current_zinc_rate) VALUES (1, ?) ON DUPLICATE KEY UPDATE current_zinc_rate = VALUES(current_zinc_rate)', [Math.round(rate * 100) / 100]);
-    req.app.get('io')?.emit('zinc_stock_updated', { action: 'zinc_rate_updated' });
-    return res.json({ success: true, message: 'Current zinc rate updated.', data: { current_zinc_rate: Math.round(rate * 100) / 100 } });
-  } catch (error) { return sendError(res, error); }
-};
-
 const createByproduct = async (req, res) => {
   try {
     const date = req.body?.transaction_date || DateTime.now().setZone('Asia/Kolkata').toISODate();
@@ -70,4 +60,4 @@ const downloadByproductsPdf = async (req, res) => {
   } catch (error) { return sendError(res, error); }
 };
 
-module.exports = { setZincRate, createByproduct, getByproducts, downloadByproductsPdf };
+module.exports = { createByproduct, getByproducts, downloadByproductsPdf };

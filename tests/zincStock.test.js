@@ -23,9 +23,11 @@ test('opening stock is independent and receipts do not change kettle', () => {
   const opened = service.applyMovement({ revision: 0, initialized: 0, plant_kg: 0, kettle_kg: 0 }, movement);
   assert.equal(opened.plant_kg, 9989);
   assert.equal(opened.kettle_kg, 30000);
-  const received = service.applyMovement(opened, service.normalizeMovement(body({ action: 'receive', amount_kg: 500 })));
+  const receipt = service.normalizeMovement(body({ action: 'receive', amount_kg: 500, zinc_rate_per_kg: 242.75 }));
+  const received = service.applyMovement(opened, receipt);
   assert.equal(received.plant_kg, 10489);
   assert.equal(received.kettle_kg, 30000);
+  assert.equal(receipt.zincRatePerKg, 242.75);
 });
 test('adjustment replaces both balances after initialization and keeps density', () => {
   const movement = service.normalizeMovement(body({
@@ -77,9 +79,11 @@ test('rejects malformed weights and supports explicit zero opening stock', () =>
     assert.throws(() => service.normalizeMovement(body({ amount_kg: value })), undefined, String(value));
   }
   assert.equal(service.grams('0', 'Opening', true), 0);
+  assert.throws(() => service.normalizeMovement(body({ action: 'receive', amount_kg: 1 })), /Zinc rate/);
+  assert.throws(() => service.normalizeMovement(body({ action: 'receive', amount_kg: 1, zinc_rate_per_kg: '100.001' })), /Zinc rate/);
 });
 test('new migrations each contain one safe additive statement', () => {
-  for (const name of ['20260920000100_create_zinc_stock.sql', '20260920000200_create_zinc_stock_movements.sql']) {
+  for (const name of ['20260920000100_create_zinc_stock.sql', '20260920000200_create_zinc_stock_movements.sql', '20260924000300_add_zinc_receipt_rate.sql']) {
     const sql = fs.readFileSync(path.join(__dirname, '../migrations/versioned', name), 'utf8');
     assert.doesNotThrow(() => validateMigrationSql(sql));
   }
@@ -94,12 +98,12 @@ function controllerFixture({ failLedger = false } = {}) {
     if (sql.includes('SELECT * FROM zinc_stock')) return [[{ ...(working || stock) }]];
     if (sql.includes('SELECT request_hash')) return [ledger.filter(row => row.request_id === params[0])];
     if (sql.startsWith('UPDATE zinc_stock')) {
-      const [plant_kg, kettle_kg, kg_per_mm, revision] = params;
-      working = { initialized: 1, plant_kg, kettle_kg, kg_per_mm, revision }; return [{}];
+      const [plant_kg, kettle_kg, kg_per_mm, current_zinc_rate, revision] = params;
+      working = { initialized: 1, plant_kg, kettle_kg, kg_per_mm, current_zinc_rate, revision }; return [{}];
     }
     if (sql.includes('INSERT INTO zinc_stock_movements')) {
       if (failLedger) throw Object.assign(new Error('Ledger unavailable'), { status: 503 });
-      staged.push({ request_id: params[0], request_hash: params[1] }); return [{}];
+      staged.push({ request_id: params[0], request_hash: params[1], zinc_rate_per_kg: params[4] }); return [{}];
     }
     throw new Error('Unexpected query');
   };
@@ -147,4 +151,13 @@ test('failed ledger insert rolls back both balances and emits no update', async 
   assert.equal(f.getStock().kettle_kg, 0);
   assert.equal(f.events.length, 0);
   assert.ok(f.calls.includes('ROLLBACK'));
+});
+test('receiving zinc saves its purchase rate on stock and the receipt ledger', async () => {
+  const f = controllerFixture();
+  const response = await f.run(body({ action: 'receive', amount_kg: 500, zinc_rate_per_kg: 242.75 }));
+  assert.equal(response.code, 200);
+  assert.equal(f.getStock().plant_kg, 10489);
+  assert.equal(f.getStock().kettle_kg, 0);
+  assert.equal(f.getStock().current_zinc_rate, 242.75);
+  assert.equal(f.getLedger()[0].zinc_rate_per_kg, 242.75);
 });

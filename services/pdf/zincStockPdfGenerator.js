@@ -32,11 +32,12 @@ async function generateZincStockPdf(rows) {
   const columns = [
     { title: 'Date / time', key: 'created_at', x: 38, width: 105 },
     { title: 'Transaction', key: 'movement_type', x: 147, width: 112 },
-    { title: 'Amount kg', key: 'amount_kg', x: 263, width: 65 },
-    { title: 'Plant after', key: 'plant_after_kg', x: 332, width: 72 },
-    { title: 'Kettle after', key: 'kettle_after_kg', x: 408, width: 78 },
-    { title: 'User', key: 'actor_name', x: 490, width: 90 },
-    { title: 'Reference / note', key: 'note', x: 584, width: 218 },
+    { title: 'Amount kg', key: 'amount_kg', x: 253, width: 61 },
+    { title: 'Rate / kg', key: 'zinc_rate_per_kg', x: 318, width: 58 },
+    { title: 'Plant after', key: 'plant_after_kg', x: 380, width: 67 },
+    { title: 'Kettle after', key: 'kettle_after_kg', x: 451, width: 71 },
+    { title: 'User', key: 'actor_name', x: 526, width: 78 },
+    { title: 'Reference / note', key: 'note', x: 608, width: 194 },
   ];
   let page;
   let y;
@@ -71,6 +72,7 @@ async function generateZincStockPdf(rows) {
       ...row,
       movement_type: labels[row.movement_type] || row.movement_type,
       amount_kg: ['initialize', 'adjust'].includes(row.movement_type) ? '-' : formatKg(row.amount_kg),
+      zinc_rate_per_kg: row.zinc_rate_per_kg == null ? '-' : `Rs ${Number(row.zinc_rate_per_kg).toFixed(2)}`,
       plant_after_kg: formatKg(row.plant_after_kg),
       kettle_after_kg: formatKg(row.kettle_after_kg),
       actor_name: row.actor_name || 'User',

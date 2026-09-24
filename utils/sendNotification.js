@@ -206,7 +206,31 @@ const sendNotificationToUser = async ({ userId, title, body, data = {} }) => {
   };
 };
 
+const sendChatNotification = async ({ senderUserId, excludeUserIds = [], senderName, messageId }) => {
+  const excludedIds = [...new Set([senderUserId, ...excludeUserIds].map(Number).filter(Boolean))];
+  const placeholders = excludedIds.map(() => "?").join(", ");
+  const [rows] = await db.query(
+    `SELECT DISTINCT tokens.fcm_token
+     FROM user_fcm_tokens tokens
+     INNER JOIN users u ON u.id = tokens.user_id
+     LEFT JOIN user_permission_overrides permission
+       ON permission.user_id = u.id AND permission.permission_key = 'chat.view'
+     WHERE u.status = 'active'
+       AND COALESCE(permission.allowed, 1) = 1
+       AND NULLIF(TRIM(tokens.fcm_token), '') IS NOT NULL
+       ${excludedIds.length ? `AND u.id NOT IN (${placeholders})` : ''}`,
+    excludedIds,
+  );
+  return sendToTokens({
+    tokens: rows.map(row => row.fcm_token),
+    title: `${senderName || 'Plant user'} sent a message`,
+    body: 'Open Plant Chat to read it.',
+    data: { type: 'plant_chat', screen: 'PlantChat', message_id: messageId },
+  });
+};
+
 module.exports = {
   sendNotificationToRoles,
   sendNotificationToUser,
+  sendChatNotification,
 };

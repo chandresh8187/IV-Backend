@@ -440,13 +440,14 @@ const standardColumns = [
   { label: 'Sr', key: 'sr_no', width: 24, lines: 1 },
   { label: 'Time', key: 'production_time', width: 40, lines: 1 },
   { label: 'Challan No.', key: 'challan_no', width: 62, lines: 2 },
-  { label: 'Party Name', key: 'party_name', width: 95, lines: 3 },
-  { label: 'Material Description', key: 'material', width: 145, lines: 4 },
+  { label: 'Party Name', key: 'party_name', width: 85, lines: 3 },
+  { label: 'Material Description', key: 'material', width: 113, lines: 4 },
   { label: 'Kettle Temp', key: 'kettle_temperature', width: 38, lines: 1 },
   { label: 'Dipping Qty', key: 'dipping_qty', width: 36, lines: 1 },
   { label: 'MS Wt.', key: 'ms_weight', width: 40, lines: 1 },
   { label: 'GI Wt.', key: 'gi_weight', width: 40, lines: 1 },
   { label: 'Zn %', key: 'zinc_percentage', width: 34, lines: 1 },
+  { label: 'Prod. Cost', key: 'production_cost', width: 42, lines: 2 },
   { label: 'C1', key: 'c1', width: 30, lines: 1 },
   { label: 'C2', key: 'c2', width: 30, lines: 1 },
   { label: 'C3', key: 'c3', width: 30, lines: 1 },
@@ -461,13 +462,14 @@ const challanColumns = [
   { label: 'Shift', key: 'shift_name', width: 36, lines: 1 },
   { label: 'Time', key: 'production_time', width: 46, lines: 1 },
   { label: 'Challan No.', key: 'challan_no', width: 55, lines: 2 },
-  { label: 'Party Name', key: 'party_name', width: 85, lines: 3 },
-  { label: 'Material Description', key: 'material', width: 125, lines: 4 },
+  { label: 'Party Name', key: 'party_name', width: 77, lines: 3 },
+  { label: 'Material Description', key: 'material', width: 95, lines: 4 },
   { label: 'Kettle Temp', key: 'kettle_temperature', width: 34, lines: 1 },
   { label: 'Dipping Qty', key: 'dipping_qty', width: 34, lines: 1 },
   { label: 'MS Wt.', key: 'ms_weight', width: 36, lines: 1 },
   { label: 'GI Wt.', key: 'gi_weight', width: 36, lines: 1 },
   { label: 'Zn %', key: 'zinc_percentage', width: 32, lines: 1 },
+  { label: 'Prod. Cost', key: 'production_cost', width: 38, lines: 2 },
   { label: 'C1', key: 'c1', width: 26, lines: 1 },
   { label: 'C2', key: 'c2', width: 26, lines: 1 },
   { label: 'C3', key: 'c3', width: 26, lines: 1 },
@@ -525,6 +527,9 @@ const getCellValue = (row, key) => {
     return value !== null && value !== undefined && value !== ''
       ? `${value}%`
       : '-';
+  }
+  if (key === 'production_cost') {
+    return value !== null && value !== undefined && value !== '' ? `Rs ${value}/kg` : '-';
   }
   return safeValue(value);
 };
