@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
 CREATE TABLE IF NOT EXISTS `user_fcm_tokens` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` INT NOT NULL,
+  `sender_name` VARCHAR(80) NULL,
   `installation_id` VARCHAR(100) NULL,
   `fcm_token` VARCHAR(512) NOT NULL,
   `device_type` VARCHAR(30) NOT NULL DEFAULT 'android',
@@ -688,4 +689,5 @@ INSERT IGNORE INTO `schema_migrations` (`filename`,`checksum`,`execution_ms`) VA
 ('20260924000400_add_production_cost.sql','e1981ddab764b3f44122a2bf0d8c308084f1f26a1c9b1447d0d8ab5304ec3f08',0),
 ('20260924000500_create_chat_messages.sql','2f4324b3e1ebe5ce35db29342993e26cae7685a0adbb1900da5e472fafe5284c',0),
 ('20260924000600_create_chat_read_receipts.sql','fbc7170158b740cbaebb89ff0e269b640bc3147ebb816888ddb8274be3d8843f',0),
-('20260924000700_add_chat_message_replies.sql','84bc07961479309f6cd9b5ff515e0813d1c24ecd394e4132918c542b83e12f26',0);
+('20260924000700_add_chat_message_replies.sql','84bc07961479309f6cd9b5ff515e0813d1c24ecd394e4132918c542b83e12f26',0),
+('20260924000800_add_chat_sender_name.sql','92eb2e986c374a8cd55d22add442166be74db7fe81ad92397dde28f1480de7f7',0);

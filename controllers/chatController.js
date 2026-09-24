@@ -5,7 +5,7 @@ const { sendChatNotification } = require('../utils/sendNotification');
 const messageSelect = `SELECT m.id, m.user_id, m.message, m.reply_to_message_id,
   DATE_FORMAT(m.edited_at, '%Y-%m-%d %H:%i:%s') edited_at,
   DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i:%s') created_at,
-  u.name user_name, u.role user_role,
+  COALESCE(NULLIF(TRIM(m.sender_name), ''), u.name) user_name, u.role user_role,
   reply.message reply_message, reply_user.name reply_user_name
   FROM chat_messages m
   JOIN users u ON u.id = m.user_id
@@ -16,6 +16,13 @@ const validateMessage = value => {
   const message = String(value || '').trim();
   if (!message || message.length > 1000) throw Object.assign(new Error('Message must contain 1 to 1000 characters.'), { status: 400 });
   return message;
+};
+const validateSenderName = value => {
+  const name = String(value || '').trim().replace(/\s+/g, ' ');
+  if (name.length < 2 || name.length > 60) {
+    throw Object.assign(new Error('Chat name must contain 2 to 60 characters.'), { status: 400 });
+  }
+  return name;
 };
 const fail = (res, error) => res.status(error.status || 500).json({ success: false, message: error.status ? error.message : 'Could not complete the chat request.' });
 
@@ -54,6 +61,12 @@ const markChatRead = async (req, res) => {
 const createMessage = async (req, res) => {
   try {
     const message = validateMessage(req.body.message);
+    let senderNameValue = req.body.sender_name;
+    if (!String(senderNameValue || '').trim()) {
+      const [[account]] = await db.query('SELECT name FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+      senderNameValue = account?.name;
+    }
+    const senderName = validateSenderName(senderNameValue);
     const replyToMessageId = req.body.reply_to_message_id == null
       ? null
       : Number(req.body.reply_to_message_id);
@@ -65,8 +78,8 @@ const createMessage = async (req, res) => {
       if (!replyRows.length) throw Object.assign(new Error('The message being replied to is no longer available.'), { status: 404 });
     }
     const [result] = await db.query(
-      'INSERT INTO chat_messages (user_id, message, reply_to_message_id) VALUES (?, ?, ?)',
-      [req.user.id, message, replyToMessageId],
+      'INSERT INTO chat_messages (user_id, sender_name, message, reply_to_message_id) VALUES (?, ?, ?, ?)',
+      [req.user.id, senderName, message, replyToMessageId],
     );
     const [[saved]] = await db.query(`${messageSelect} WHERE m.id = ?`, [result.insertId]);
     req.app.get('io')?.to('chat').emit('chat_message_created', saved);
