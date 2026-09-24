@@ -206,25 +206,27 @@ const sendNotificationToUser = async ({ userId, title, body, data = {} }) => {
   };
 };
 
-const sendChatNotification = async ({ senderUserId, excludeUserIds = [], senderName, messageId }) => {
-  const excludedIds = [...new Set([senderUserId, ...excludeUserIds].map(Number).filter(Boolean))];
-  const placeholders = excludedIds.map(() => "?").join(", ");
+const sendChatNotification = async ({ senderInstallationId, senderName, message, messageId }) => {
   const [rows] = await db.query(
-    `SELECT DISTINCT tokens.fcm_token
+    `SELECT DISTINCT tokens.fcm_token, participant.display_name
      FROM user_fcm_tokens tokens
-     INNER JOIN users u ON u.id = tokens.user_id
+     INNER JOIN chat_participant_devices device ON device.installation_id = tokens.installation_id
+     INNER JOIN chat_participants participant ON participant.id = device.participant_id
+     INNER JOIN users u ON u.id = participant.user_id
      LEFT JOIN user_permission_overrides permission
        ON permission.user_id = u.id AND permission.permission_key = 'chat.view'
      WHERE u.status = 'active'
        AND COALESCE(permission.allowed, 1) = 1
        AND NULLIF(TRIM(tokens.fcm_token), '') IS NOT NULL
-       ${excludedIds.length ? `AND u.id NOT IN (${placeholders})` : ''}`,
-    excludedIds,
+       AND tokens.installation_id <> ?`,
+    [senderInstallationId],
   );
+  const mentioned = rows.filter(row => new RegExp(`(^|\\s)@${String(row.display_name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\s|[,.!?])`, 'i').test(message || ''));
+  const recipients = mentioned.length ? mentioned : rows;
   return sendToTokens({
-    tokens: rows.map(row => row.fcm_token),
-    title: `${senderName || 'Plant user'} sent a message`,
-    body: 'Open Plant Chat to read it.',
+    tokens: recipients.map(row => row.fcm_token),
+    title: mentioned.length ? `${senderName || 'Plant user'} mentioned you` : `${senderName || 'Plant user'} sent a message`,
+    body: mentioned.length ? 'Open Plant Chat to view the mention.' : 'Open Plant Chat to read it.',
     data: { type: 'plant_chat', screen: 'PlantChat', message_id: messageId },
   });
 };

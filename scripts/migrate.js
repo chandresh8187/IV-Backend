@@ -9,6 +9,17 @@ const { validateMigrationSql } = require("./migrationSafety");
 
 const MIGRATIONS_DIRECTORY = path.join(__dirname, "..", "migrations", "versioned");
 const MIGRATION_LOCK = "iv_api_schema_migrations";
+const LEGACY_MIGRATION_CHECKSUMS = new Map([
+  [
+    "20260924001200_unique_chat_participant_mobile.sql",
+    new Set([
+      // The first version added a unique mobile index. Some databases applied it
+      // before participant reuse was changed to tolerate existing duplicates.
+      "939279d9f007415a4c8795bfda86c71c79968e93b9c6bab3545556266a8cd41c",
+      "df867a803ffd8cc09d9ac0e7d8b29b6ea76b3be55fdd238b3b63ff3f1cd81a2f",
+    ]),
+  ],
+]);
 
 function getMigrationChecksums(sql) {
   const normalizedSql = sql.replace(/\r\n?/g, "\n");
@@ -83,7 +94,8 @@ function verifyMigrationHistory(files, applied) {
     if (!file) {
       throw new Error(`Applied migration file is missing: ${filename}`);
     }
-    if (!file.acceptedChecksums.has(record.checksum)) {
+    const acceptedLegacyChecksums = LEGACY_MIGRATION_CHECKSUMS.get(filename);
+    if (!file.acceptedChecksums.has(record.checksum) && !acceptedLegacyChecksums?.has(record.checksum)) {
       throw new Error(`Applied migration was modified: ${filename}`);
     }
   }
@@ -177,7 +189,14 @@ async function run(options = {}) {
 
 if (require.main === module) {
   run().catch((error) => {
-    console.error(`Migration failed: ${error.message}`);
+    const nestedErrors = Array.isArray(error?.errors)
+      ? error.errors
+          .map(item => item?.message || item?.code)
+          .filter(Boolean)
+          .join('; ')
+      : '';
+    const detail = error?.message || nestedErrors || error?.code || String(error);
+    console.error(`Migration failed: ${detail}`);
     process.exitCode = 1;
   });
 }
