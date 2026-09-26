@@ -3,6 +3,9 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
+  { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: ['superadmin', 'labour'] },
+  { key: 'labour_weights.create', group: 'Labour Weights', label: 'Add labour weights', description: 'Add MS weight and dip quantity to the production queue.', defaultRoles: ['labour'] },
+  { key: 'labour_weights.edit', group: 'Labour Weights', label: 'Edit labour weights', description: 'Edit pending labour weight queue items.', defaultRoles: ['superadmin'] },
   { key: 'chat.view', group: 'Production', label: 'Use plant chat', description: 'View users and exchange production messages.', defaultRoles: ALL_ROLES },
   { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and transaction history.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'zinc_stock.receive', group: 'Zinc Stock', label: 'Receive zinc in plant', description: 'Add purchased or received zinc to plant stock.', defaultRoles: ['superadmin', 'plant_manager'] },

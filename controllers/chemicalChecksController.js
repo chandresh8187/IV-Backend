@@ -44,7 +44,7 @@ const createChemicalCheck = async (req, res) => {
     const inspectionDate = req.body?.inspection_date || DateTime.now().setZone('Asia/Kolkata').toISODate();
     if (!validDate(inspectionDate)) throw fail('Select a valid inspection date.');
     const fluxPh = parseReading(req.body?.flux_ph, 'Flux pH', { min: 0, max: 14 });
-    const acidPh = parseReading(req.body?.acid_ph, 'Acid pH', { min: 0, max: 14 });
+    const acidPh = parseReading(req.body?.acid_ph, 'Acid pH', { min: -14, max: 14 });
     const fluxDensity = parseReading(req.body?.flux_density, 'Flux density', { min: 0.0001, max: 10 });
     const fluxTemperature = parseReading(req.body?.flux_temperature_c, 'Flux temperature', { min: -50, max: 200 });
     const acidDensity = parseReading(req.body?.acid_density, 'Acid density', { min: 0.0001, max: 10 });

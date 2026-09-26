@@ -38,13 +38,19 @@ const changeCorrection = async (req, res, resume) => {
     }
     if (resume) {
       await connection.query(
-        `UPDATE production_shift_context SET correction_shift_id = NULL, revision = revision + 1,
+        `UPDATE production_shift_context SET correction_shift_id = NULL, correction_user_id = NULL, revision = revision + 1,
          resumed_by = ?, resumed_at = NOW() WHERE id = 1`, [req.user.id],
       );
     } else {
       const shiftId = Number(req.body?.shift_id);
+      const targetUserId = Number(req.body?.user_id || req.user.id);
       if (!Number.isSafeInteger(shiftId) || shiftId < 1) {
         throw Object.assign(new Error('Select a previous shift'), { status: 400 });
+      }
+      if (!Number.isSafeInteger(targetUserId) || targetUserId < 1) throw Object.assign(new Error('Select the user who will correct this shift'), { status: 400 });
+      if (req.body?.user_id != null) {
+        const [users] = await connection.query("SELECT id FROM users WHERE id=? AND status='active' AND role IN ('supervisor','admin','plant_manager','superadmin')", [targetUserId]);
+        if (!users.length) throw Object.assign(new Error('Select an active production user'), { status: 400 });
       }
       const [shifts] = await connection.query(
         `SELECT id FROM shifts WHERE id = ? AND status = 'closed' AND id <> ?
@@ -53,15 +59,15 @@ const changeCorrection = async (req, res, resume) => {
       );
       if (!shifts.length) throw Object.assign(new Error('Only an ended shift can be opened for correction'), { status: 409 });
       await connection.query(
-        `UPDATE production_shift_context SET correction_shift_id = ?, revision = revision + 1,
+        `UPDATE production_shift_context SET correction_shift_id = ?, correction_user_id = ?, revision = revision + 1,
          opened_by = ?, opened_at = NOW(), resumed_by = NULL, resumed_at = NULL WHERE id = 1`,
-        [shiftId, req.user.id],
+        [shiftId, targetUserId, req.user.id],
       );
     }
     await connection.commit();
     req.app.get('io')?.emit('shift_updated', { action: resume ? 'correction_resumed' : 'correction_opened' });
     req.app.get('io')?.emit('production_updated', { action: 'shift_context_changed' });
-    return res.json({ success: true, message: resume ? 'Live Production returned to the current shift' : 'Previous shift opened for correction on all devices' });
+    return res.json({ success: true, message: resume ? 'Correction closed and the selected user returned to live production' : 'Previous shift opened for the selected user' });
   } catch (error) {
     if (connection) await connection.rollback();
     return sendError(res, error);
@@ -70,7 +76,7 @@ const changeCorrection = async (req, res, resume) => {
 
 const getCorrectionPlanningItems = async (req, res) => {
   try {
-    const context = await getProductionContext();
+    const context = await getProductionContext(null, true, req.user.id);
     if (!context.correction) return res.json({ success: true, data: [] });
     const [items] = await db.query(
       `SELECT pp.id AS planning_id, ppi.id AS planning_item_id, ppi.item_id,

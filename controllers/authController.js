@@ -134,7 +134,7 @@ const registerUser = async (req, res) => {
       });
     }
 
-    if (!["superadmin", "supervisor", "admin", "plant_manager"].includes(role)) {
+    if (!["superadmin", "supervisor", "admin", "plant_manager", "labour"].includes(role)) {
       return res.status(400).json({
         success: false,
         message: "Unsupported account role",
@@ -155,17 +155,10 @@ const registerUser = async (req, res) => {
       });
     }
 
-    if (
-      password.length < 8 ||
-      password.length > 72 ||
-      !/[A-Z]/.test(password) ||
-      !/[a-z]/.test(password) ||
-      !/\d/.test(password)
-    ) {
+    if (password.length > 72) {
       return res.status(400).json({
         success: false,
-        message:
-          "Password must be 8-72 characters and include uppercase, lowercase and a number",
+        message: "Password must be 72 characters or fewer",
       });
     }
 

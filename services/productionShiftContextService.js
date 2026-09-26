@@ -15,14 +15,14 @@ const getCorrectionState = async (executor = db, lock = false) => {
 
 const canUseShiftCorrection = user => ['superadmin', 'plant_manager', 'supervisor'].includes(String(user?.role || '').trim().toLowerCase());
 
-const getProductionContext = async (currentShift = null, allowCorrection = true) => {
+const getProductionContext = async (currentShift = null, allowCorrection = true, userId = null) => {
   const current = currentShift || await ensureAutomaticShift();
-  if (!allowCorrection) return {
+  const state = await getCorrectionState();
+  if (!allowCorrection && state.correction_user_id == null) return {
     state: { revision: 0, correction_shift_id: null, opened_by: null, opened_at: null },
     shift: current, correction: false, ignoreCorrection: true,
   };
-  const state = await getCorrectionState();
-  if (!state.correction_shift_id) return { state, shift: current, correction: false };
+  if (!state.correction_shift_id || (state.correction_user_id != null && userId != null && Number(state.correction_user_id) !== Number(userId))) return { state, shift: current, correction: false };
   const [rows] = await db.query(
     `SELECT *, DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
      FROM shifts WHERE id = ? AND status = 'closed'`, [state.correction_shift_id],

@@ -1,10 +1,10 @@
 -- IV Square Structure production management database
 -- Clean-install schema for MariaDB 10.5+ / MySQL 8.0+
--- Generated from the backend queries and migrations on 2026-09-24.
+-- Generated from the backend queries and every versioned migration on 2026-09-26.
 --
 -- IMPORTANT: Import this file into an EMPTY database named
--- u436685010_iv_app. It intentionally contains no users, passwords, tokens,
--- customer data, or production data.
+-- u436685010_iv_app. It contains only required system defaults and one
+-- bcrypt-protected bootstrap superadmin; it contains no plant production data.
 
 SET NAMES utf8mb4;
 SET time_zone = '+05:30';
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `name` VARCHAR(100) NOT NULL,
   `email` VARCHAR(190) NOT NULL,
   `password` VARCHAR(255) NOT NULL,
-  `role` ENUM('superadmin','plant_manager','admin','supervisor') NOT NULL,
+  `role` ENUM('superadmin','plant_manager','admin','supervisor','labour') NOT NULL,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `created_by` INT NULL,
   `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS `user_permission_overrides` (
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`user_id`,`permission_key`),
   CONSTRAINT `fk_permission_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `labour_weight_entries` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `labour_user_id` INT NOT NULL,
+  `ms_weight` DECIMAL(12,3) NOT NULL,
+  `dipping_qty` INT UNSIGNED NOT NULL,
+  `status` ENUM('pending','used') NOT NULL DEFAULT 'pending',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_labour_weight_queue` (`status`,`id`),
+  KEY `idx_labour_weight_user` (`labour_user_id`),
+  CONSTRAINT `fk_labour_weight_user` FOREIGN KEY (`labour_user_id`) REFERENCES `users` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `app_settings` (
@@ -292,9 +306,37 @@ CREATE TABLE IF NOT EXISTS `contractor_rotations` (
   CONSTRAINT `fk_rotation_user` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `chat_participants` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `installation_id` VARCHAR(100) NOT NULL,
+  `display_name` VARCHAR(60) NOT NULL,
+  `mobile_number` VARCHAR(20) NOT NULL,
+  `last_seen_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_chat_participant_installation` (`installation_id`),
+  KEY `idx_chat_participant_user` (`user_id`),
+  KEY `idx_chat_participant_mobile` (`mobile_number`),
+  CONSTRAINT `fk_chat_participant_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `chat_participant_devices` (
+  `installation_id` VARCHAR(100) NOT NULL,
+  `participant_id` BIGINT UNSIGNED NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`installation_id`),
+  KEY `idx_chat_device_participant` (`participant_id`),
+  CONSTRAINT `fk_chat_device_participant` FOREIGN KEY (`participant_id`) REFERENCES `chat_participants` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `chat_messages` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` INT NOT NULL,
+  `sender_name` VARCHAR(80) NULL,
+  `participant_id` BIGINT UNSIGNED NULL,
   `message` VARCHAR(1000) NOT NULL,
   `reply_to_message_id` BIGINT UNSIGNED NULL,
   `edited_at` TIMESTAMP NULL,
@@ -303,9 +345,20 @@ CREATE TABLE IF NOT EXISTS `chat_messages` (
   PRIMARY KEY (`id`),
   KEY `idx_chat_created` (`created_at`,`id`),
   KEY `idx_chat_user` (`user_id`),
+  KEY `idx_chat_message_participant` (`participant_id`),
   KEY `idx_chat_reply` (`reply_to_message_id`),
   CONSTRAINT `fk_chat_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_chat_message_participant` FOREIGN KEY (`participant_id`) REFERENCES `chat_participants` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_chat_reply_message` FOREIGN KEY (`reply_to_message_id`) REFERENCES `chat_messages` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `chat_participant_reads` (
+  `participant_id` BIGINT UNSIGNED NOT NULL,
+  `last_read_message_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`participant_id`),
+  KEY `idx_chat_participant_last_read` (`last_read_message_id`),
+  CONSTRAINT `fk_chat_participant_read` FOREIGN KEY (`participant_id`) REFERENCES `chat_participants` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `chat_read_receipts` (
@@ -417,6 +470,7 @@ CREATE TABLE IF NOT EXISTS `user_production_preferences` (
 CREATE TABLE IF NOT EXISTS `production_shift_context` (
   `id` TINYINT UNSIGNED NOT NULL,
   `correction_shift_id` INT NULL,
+  `correction_user_id` INT NULL,
   `revision` BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `opened_by` INT NULL,
   `opened_at` DATETIME NULL,
@@ -424,7 +478,9 @@ CREATE TABLE IF NOT EXISTS `production_shift_context` (
   `resumed_at` DATETIME NULL,
   PRIMARY KEY (`id`),
   KEY `idx_context_correction_shift` (`correction_shift_id`),
+  KEY `idx_production_shift_context_user` (`correction_user_id`),
   CONSTRAINT `fk_context_correction_shift` FOREIGN KEY (`correction_shift_id`) REFERENCES `shifts` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_production_shift_context_user` FOREIGN KEY (`correction_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_context_opened_by` FOREIGN KEY (`opened_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_context_resumed_by` FOREIGN KEY (`resumed_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -582,7 +638,7 @@ CREATE TABLE IF NOT EXISTS `chemical_checks` (
   KEY `idx_chemical_checks_user` (`checked_by_user_id`),
   CONSTRAINT `fk_chemical_checks_user` FOREIGN KEY (`checked_by_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `chk_flux_ph` CHECK (`flux_ph` BETWEEN 0 AND 14),
-  CONSTRAINT `chk_acid_ph` CHECK (`acid_ph` BETWEEN 0 AND 14),
+  CONSTRAINT `chk_acid_ph` CHECK (`acid_ph` BETWEEN -14 AND 14),
   CONSTRAINT `chk_flux_density` CHECK (`flux_density` > 0),
   CONSTRAINT `chk_acid_density` CHECK (`acid_density` > 0),
   CONSTRAINT `chk_flux_temperature` CHECK (`flux_temperature_c` IS NULL OR `flux_temperature_c` BETWEEN -50 AND 200)
@@ -607,7 +663,7 @@ INSERT IGNORE INTO `expense_settings` (`id`) VALUES (1);
 INSERT IGNORE INTO `users`
   (`id`,`name`,`email`,`password`,`role`,`is_active`,`created_by`,`status`,`assigned_shift`)
 VALUES
-  (1,'IV Superadmin','superadmin@ivsquarestructure.com','$2b$12$JdldbfCcuIhn/23yHqP2L./stby9m8eCSRSHU9xvECTlEKibzWDsK','superadmin',1,NULL,'active',NULL);
+  (1,'IV Superadmin','superadmin@ivsquarestructure.com','$2b$12$fuGBGnrn2ny71Kckxt60Vuv6IC0d6aKnwSjMQAnDR.uEOR774DLha','superadmin',1,NULL,'active',NULL);
 
 INSERT IGNORE INTO `financial_years`
   (`id`,`financial_year`,`created_by`)
@@ -690,4 +746,13 @@ INSERT IGNORE INTO `schema_migrations` (`filename`,`checksum`,`execution_ms`) VA
 ('20260924000500_create_chat_messages.sql','2f4324b3e1ebe5ce35db29342993e26cae7685a0adbb1900da5e472fafe5284c',0),
 ('20260924000600_create_chat_read_receipts.sql','fbc7170158b740cbaebb89ff0e269b640bc3147ebb816888ddb8274be3d8843f',0),
 ('20260924000700_add_chat_message_replies.sql','84bc07961479309f6cd9b5ff515e0813d1c24ecd394e4132918c542b83e12f26',0),
-('20260924000800_add_chat_sender_name.sql','92eb2e986c374a8cd55d22add442166be74db7fe81ad92397dde28f1480de7f7',0);
+('20260924000800_add_chat_sender_name.sql','92eb2e986c374a8cd55d22add442166be74db7fe81ad92397dde28f1480de7f7',0),
+('20260924000900_create_chat_participants.sql','aa2277488e61bf5812f1be20ea871695434f3b5ec108991817fe2e1563b59843',0),
+('20260924001000_link_chat_message_participant.sql','73d318cb9fb93fdb03687d4137002ef40beeeec77100b96e8207603805da2349',0),
+('20260924001100_create_chat_participant_reads.sql','9376da81ef9b016bdf5d28e9f7a1852eee91b8dd31cd30d552862413016b014d',0),
+('20260924001200_unique_chat_participant_mobile.sql','cb1e1568595feda4a1aac309edd6448e4f5614f6a87de59c82e9eb22c7b675c1',0),
+('20260924001300_create_chat_participant_devices.sql','444bb23ab32ef0de55e6ae2f7a1d9f996008e20f166d656287b17e6ded237487',0),
+('20260925000100_allow_negative_acid_ph.sql','12bd4ac9049f0772437e42102c5c3ad702e414a4bee9949317e48d3924b3984d',0),
+('20260925000200_add_labour_role.sql','a519aa9b67ff94f433b6ace438ce36c610244f5085cc45b97198687967fa23d7',0),
+('20260925000300_create_labour_weight_entries.sql','c403a422b4bce2bbcb174cc64419cba8fc5e7283a95c1da1d416c1d753219e9a',0),
+('20260925000400_target_shift_correction_user.sql','d83c6dd45e6d75e740e4327ce9db0f8847a789b059c9bef3ce5fe8de53522924',0);

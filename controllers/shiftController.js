@@ -12,12 +12,8 @@ const getShiftStatus = async (req, res) => {
   try {
     const schedule = await getShiftSchedule();
     const activeShift = await ensureAutomaticShift();
-    const shiftCorrectionAllowed = await hasPermission({
-      userId: req.user.id,
-      role: req.user.role,
-      permissionKey: 'shifts.correct',
-    });
-    const productionContext = await getProductionContext(activeShift, shiftCorrectionAllowed);
+    const shiftCorrectionAllowed = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct' });
+    const productionContext = await getProductionContext(activeShift, shiftCorrectionAllowed, req.user.id);
     const calculated = getCurrentShiftInfo(null, schedule);
     const plantStatus = await getPlantStatusRow();
 
@@ -42,9 +38,11 @@ const getShiftStatus = async (req, res) => {
         active_shift: activeShift,
         production_shift: productionContext.shift,
         correction_mode: productionContext.correction,
+        correction_active: Boolean(productionContext.state.correction_shift_id),
         shift_revision: Number(productionContext.state.revision),
         correction_opened_by: productionContext.state.opened_by,
         correction_opened_at: productionContext.state.opened_at,
+        correction_user_id: productionContext.state.correction_user_id,
         correction_production_allowed: productionContext.correction,
         plant_status: plantStatus.status,
         production_allowed:

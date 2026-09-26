@@ -8,6 +8,7 @@ const {
   getUsers,
   updateUser,
   setUserStatus,
+  resetUserPassword,
 } = require("../controllers/userController");
 const {
   getUserPermissions,
@@ -47,6 +48,13 @@ router.patch(
   authMiddleware,
   roleMiddleware(["superadmin"], "users.manage"),
   setUserStatus,
+);
+
+router.put(
+  "/:id/password",
+  authMiddleware,
+  roleMiddleware(["superadmin"], "users.manage"),
+  resetUserPassword,
 );
 
 module.exports = router;

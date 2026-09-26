@@ -122,6 +122,7 @@ const saveProductionEntry = async (req, res) => {
       c3,
       c4,
       c5,
+      labour_weight_id,
     } = req.body;
 
     if (!entry_type) {
@@ -148,12 +149,8 @@ const saveProductionEntry = async (req, res) => {
     }
 
     const io = req.app.get("io");
-    const shiftCorrectionAllowed = await hasPermission({
-      userId: req.user.id,
-      role: req.user.role,
-      permissionKey: 'shifts.correct',
-    });
-    const productionContext = await getProductionContext(null, shiftCorrectionAllowed);
+    const shiftCorrectionAllowed = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct' });
+    const productionContext = await getProductionContext(null, shiftCorrectionAllowed, req.user.id);
     const activeShift = productionContext.shift;
     assertContext(req.body, productionContext);
     if (productionContext.correction && entry_type !== 'full') {
@@ -422,6 +419,23 @@ const saveProductionEntry = async (req, res) => {
           });
           action = "updated";
         } else {
+          if (labour_weight_id != null) {
+            const labourEntryId = Number(labour_weight_id);
+            if (!Number.isInteger(labourEntryId) || labourEntryId < 1) {
+              throw Object.assign(new Error('Select a valid labour weight entry.'), { status: 400 });
+            }
+            const [labourRows] = await connection.query(
+              `SELECT id, ms_weight, dipping_qty FROM labour_weight_entries
+               WHERE id = ? AND status = 'pending' FOR UPDATE`,
+              [labourEntryId],
+            );
+            if (!labourRows.length) {
+              throw Object.assign(new Error('This labour weight entry was already used. Refresh and reopen the production form.'), { status: 409 });
+            }
+            if (Number(labourRows[0].ms_weight) !== Number(ms_weight) || Number(labourRows[0].dipping_qty) !== qty) {
+              throw Object.assign(new Error('The labour weight entry changed. Refresh and reopen the production form.'), { status: 409 });
+            }
+          }
           const [nextSrRows] = await connection.query(
             `SELECT COALESCE(MAX(sr_no), 0) + 1 AS next_sr_no
              FROM production_entries WHERE shift_id = ?`,
@@ -467,6 +481,12 @@ const saveProductionEntry = async (req, res) => {
             ],
           );
           savedEntryId = result.insertId;
+          if (labour_weight_id != null) {
+            await connection.query(
+              "UPDATE labour_weight_entries SET status = 'used', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+              [Number(labour_weight_id)],
+            );
+          }
           await applyProductionZinc(connection, {
             entryId: savedEntryId,
             srNo: savedSrNo,
@@ -501,6 +521,9 @@ const saveProductionEntry = async (req, res) => {
           action: "progress_updated",
           id: planningId,
         });
+        if (labour_weight_id != null && action === "created") {
+          io.emit("labour_weights_updated", { action: "used", id: Number(labour_weight_id) });
+        }
 
         const zincAlert = await notifyZincSafely({
           entryId: savedEntryId,

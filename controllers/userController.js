@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const bcrypt = require("bcryptjs");
 const { hasPermission } = require("../services/permissionService");
 const { ensureAutomaticShift } = require("../services/automaticShiftService");
 
@@ -16,7 +17,7 @@ const getUsers = async (req, res) => {
 
     if (req.user.role === "superadmin" || canManageUsers) {
       where =
-        "WHERE users.role IN ('superadmin', 'plant_manager', 'admin', 'supervisor')";
+        "WHERE users.role IN ('superadmin', 'plant_manager', 'admin', 'supervisor', 'labour')";
     } else {
       where = "WHERE users.role = 'supervisor'";
     }
@@ -68,6 +69,7 @@ const getUsers = async (req, res) => {
           WHEN 'plant_manager' THEN 1
           WHEN 'admin' THEN 2
           WHEN 'supervisor' THEN 3
+          WHEN 'labour' THEN 4
           ELSE 4
         END,
         users.name ASC
@@ -83,6 +85,7 @@ const getUsers = async (req, res) => {
     const admins = rows.filter((user) => user.role === "admin");
 
     const supervisors = rows.filter((user) => user.role === "supervisor");
+    const labour = rows.filter((user) => user.role === "labour");
 
     return res.json({
       success: true,
@@ -92,6 +95,7 @@ const getUsers = async (req, res) => {
         plant_managers: plantManagers,
         admins,
         supervisors,
+        labour,
 
         // Optional combined list for clients that prefer one array.
         users: rows,
@@ -133,7 +137,7 @@ const updateUser = async (req, res) => {
       });
     }
 
-    if (!["plant_manager", "admin", "supervisor"].includes(role)) {
+    if (!["plant_manager", "admin", "supervisor", "labour"].includes(role)) {
       return res.status(400).json({
         success: false,
         message: "Existing accounts cannot be promoted to Superadmin",
@@ -255,8 +259,48 @@ const setUserStatus = async (req, res) => {
   }
 };
 
+const resetUserPassword = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const password = String(req.body.password || "");
+
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ success: false, message: "Invalid user id" });
+    }
+
+    if (!password || password.length > 72) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a password with 72 characters or fewer",
+      });
+    }
+
+    const [users] = await db.query("SELECT id FROM users WHERE id = ? LIMIT 1", [id]);
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db.query(
+      "UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?",
+      [hashedPassword, id],
+    );
+
+    req.app.get("io")?.emit("users_updated", {
+      action: "password_reset",
+      user_id: id,
+    });
+
+    return res.json({ success: true, message: "User password updated successfully" });
+  } catch (error) {
+    console.error("resetUserPassword:", error);
+    return res.status(500).json({ success: false, message: "Unable to update password" });
+  }
+};
+
 module.exports = {
   getUsers,
   updateUser,
   setUserStatus,
+  resetUserPassword,
 };

@@ -447,7 +447,6 @@ const standardColumns = [
   { label: 'MS Wt.', key: 'ms_weight', width: 40, lines: 1 },
   { label: 'GI Wt.', key: 'gi_weight', width: 40, lines: 1 },
   { label: 'Zn %', key: 'zinc_percentage', width: 34, lines: 1 },
-  { label: 'Prod. Cost', key: 'production_cost', width: 42, lines: 2 },
   { label: 'C1', key: 'c1', width: 30, lines: 1 },
   { label: 'C2', key: 'c2', width: 30, lines: 1 },
   { label: 'C3', key: 'c3', width: 30, lines: 1 },
@@ -469,7 +468,6 @@ const challanColumns = [
   { label: 'MS Wt.', key: 'ms_weight', width: 36, lines: 1 },
   { label: 'GI Wt.', key: 'gi_weight', width: 36, lines: 1 },
   { label: 'Zn %', key: 'zinc_percentage', width: 32, lines: 1 },
-  { label: 'Prod. Cost', key: 'production_cost', width: 38, lines: 2 },
   { label: 'C1', key: 'c1', width: 26, lines: 1 },
   { label: 'C2', key: 'c2', width: 26, lines: 1 },
   { label: 'C3', key: 'c3', width: 26, lines: 1 },
@@ -527,9 +525,6 @@ const getCellValue = (row, key) => {
     return value !== null && value !== undefined && value !== ''
       ? `${value}%`
       : '-';
-  }
-  if (key === 'production_cost') {
-    return value !== null && value !== undefined && value !== '' ? `Rs ${value}/kg` : '-';
   }
   return safeValue(value);
 };

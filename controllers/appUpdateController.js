@@ -1,6 +1,7 @@
 const db = require("../config/db");
 const crypto = require("crypto");
 const fs = require("fs");
+const bcrypt = require("bcryptjs");
 
 const EMPTY_ANDROID_RELEASE = {
   enabled: false,
@@ -192,4 +193,39 @@ const uploadAndroidRelease = async (req, res) => {
   }
 };
 
-module.exports = { getAndroidUpdate, updateAndroidRelease, uploadAndroidRelease };
+const triggerOtaUpdate = async (req, res) => {
+  const configuredPasscode = String(process.env.OTA_UPDATE_PASSCODE || "");
+  const suppliedPasscode = String(req.body?.passcode || "");
+  let valid = false;
+
+  if (configuredPasscode) {
+    const expected = Buffer.from(configuredPasscode);
+    const supplied = Buffer.from(suppliedPasscode);
+    valid = expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
+  } else {
+    const [users] = await db.query(
+      "SELECT password FROM users WHERE id = ? AND role = 'superadmin' AND status = 'active' LIMIT 1",
+      [req.user.id],
+    );
+    valid = users.length > 0 && await bcrypt.compare(suppliedPasscode, users[0].password);
+  }
+
+  if (!valid) {
+    return res.status(403).json({ success: false, message: "Invalid OTA passcode" });
+  }
+
+  const requestId = crypto.randomUUID();
+  const io = req.app.get("io");
+  io?.emit("ota_update_requested", {
+    request_id: requestId,
+    requested_at: new Date().toISOString(),
+  });
+
+  return res.json({
+    success: true,
+    message: "Connected app devices were asked to download the latest EAS update",
+    data: { request_id: requestId, connected_clients: io?.engine?.clientsCount || 0 },
+  });
+};
+
+module.exports = { getAndroidUpdate, updateAndroidRelease, uploadAndroidRelease, triggerOtaUpdate };

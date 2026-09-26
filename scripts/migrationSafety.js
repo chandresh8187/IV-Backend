@@ -130,6 +130,11 @@ function validateMigrationSql(sql) {
     /^ALTER TABLE `?user_fcm_tokens`? MODIFY(?: COLUMN)? `?id`? BIGINT UNSIGNED NOT NULL AUTO_INCREMENT$/i.test(
       normalizedSql,
     );
+  const isApprovedAcidPhConstraintChange =
+    /^ALTER TABLE `?chemical_checks`? DROP CONSTRAINT IF EXISTS `?chk_acid_ph`?, ADD CONSTRAINT `?chk_acid_ph`? CHECK \(`?acid_ph`? BETWEEN -14 AND 14\)$/i.test(
+      normalizedSql,
+    );
+  const isApprovedLabourRole = /^ALTER TABLE `?users`? MODIFY COLUMN `?role`? ENUM\('','','','',''\) NOT NULL$/i.test(normalizedSql);
   for (const rule of DESTRUCTIVE_PATTERNS) {
     if (
       rule.pattern.test(scannableSql) &&
@@ -143,6 +148,14 @@ function validateMigrationSql(sql) {
       ) &&
       !(
         isApprovedFcmIdRepair &&
+        rule.reason === "CHANGE/MODIFY can rewrite existing column data"
+      ) &&
+      !(
+        isApprovedAcidPhConstraintChange &&
+        rule.reason === "DROP operations are not allowed"
+      ) &&
+      !(
+        isApprovedLabourRole &&
         rule.reason === "CHANGE/MODIFY can rewrite existing column data"
       )
     ) {

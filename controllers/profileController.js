@@ -221,17 +221,10 @@ const changeMyPassword = async (req, res) => {
       });
     }
 
-    if (
-      newPassword.length < 8 ||
-      newPassword.length > 72 ||
-      !/[A-Z]/.test(newPassword) ||
-      !/[a-z]/.test(newPassword) ||
-      !/\d/.test(newPassword)
-    ) {
+    if (newPassword.length > 72) {
       return res.status(400).json({
         success: false,
-        message:
-          "Password must be 8-72 characters and include uppercase, lowercase and a number",
+        message: "Password must be 72 characters or fewer",
       });
     }
 

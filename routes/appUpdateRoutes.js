@@ -9,6 +9,7 @@ const {
   getAndroidUpdate,
   updateAndroidRelease,
   uploadAndroidRelease,
+  triggerOtaUpdate,
 } = require("../controllers/appUpdateController");
 
 const router = express.Router();
@@ -45,6 +46,13 @@ router.post(
   roleMiddleware(["superadmin"], "app_updates.manage"),
   upload.single("apk"),
   uploadAndroidRelease,
+);
+
+router.post(
+  "/ota/trigger",
+  authMiddleware,
+  roleMiddleware(["superadmin"], "app_updates.manage"),
+  triggerOtaUpdate,
 );
 
 module.exports = router;
