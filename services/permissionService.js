@@ -3,9 +3,13 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
-  { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: ['superadmin', 'labour'] },
+  { key: 'gas.view', group: 'Gas Management', label: 'View gas management', description: 'View bottle inventory, vaporizer positions, consumption, and production efficiency.', defaultRoles: ALL_ROLES },
+  { key: 'gas.manage', group: 'Gas Management', label: 'Manage gas bottle stock', description: 'Receive bottles, record filled weights and start gas supply.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'gas.operate', group: 'Gas Management', label: 'Start and switch gas bottles', description: 'Record bottle start, finish, remaining gas, and the next running position.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'gas.report', group: 'Gas Management', label: 'Generate gas PDF report', description: 'Generate bottle purchase, consumption, production, and cost reports.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: ['superadmin', 'supervisor', 'labour'] },
   { key: 'labour_weights.create', group: 'Labour Weights', label: 'Add labour weights', description: 'Add MS weight and dip quantity to the production queue.', defaultRoles: ['labour'] },
-  { key: 'labour_weights.edit', group: 'Labour Weights', label: 'Edit labour weights', description: 'Edit pending labour weight queue items.', defaultRoles: ['superadmin'] },
+  { key: 'labour_weights.edit', group: 'Labour Weights', label: 'Edit labour weights', description: 'Correct labour weights and linked production entries.', defaultRoles: ['superadmin', 'supervisor'] },
   { key: 'chat.view', group: 'Production', label: 'Use plant chat', description: 'View users and exchange production messages.', defaultRoles: ALL_ROLES },
   { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and transaction history.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'zinc_stock.receive', group: 'Zinc Stock', label: 'Receive zinc in plant', description: 'Add purchased or received zinc to plant stock.', defaultRoles: ['superadmin', 'plant_manager'] },

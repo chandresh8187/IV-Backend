@@ -189,6 +189,7 @@ app.use('/api/expense-report', require('./routes/expenseReportRoutes'));
 app.use('/api/monthly-reports', require('./routes/monthlyReportRoutes'));
 app.use('/api/chemical-checks', require('./routes/chemicalChecksRoutes'));
 app.use('/api/labour-weights', require('./routes/labourWeightRoutes'));
+app.use('/api/gas-management', require('./routes/gasManagementRoutes'));
 app.use('/api/chat', require('./routes/chatRoutes'));
 app.use("/api/plant", require("./routes/plantStatusRoutes"));
 app.use("/api/production-history", require("./routes/productionHistoryRoutes"));

@@ -3,6 +3,24 @@ const db = require('../config/db');
 const { normalizeMovement, applyMovement, serializeStock } = require('../services/zincStockService');
 const { generateZincStockPdf } = require('../services/pdf/zincStockPdfGenerator');
 const { hasPermission } = require('../services/permissionService');
+const { getConfiguredCurrentFinancialYear } = require('../services/financialYearService');
+const { buildReport: buildExpenseReport } = require('./expenseReportController');
+
+const readFinancialYearAverageRate = async (queryable = db) => {
+  const year = await getConfiguredCurrentFinancialYear(queryable);
+  const [rows] = await queryable.query(`SELECT ROUND(AVG(zinc_rate_per_kg), 2) AS average_zinc_rate,
+    COUNT(zinc_rate_per_kg) AS rate_count
+    FROM zinc_stock_movements
+    WHERE movement_type = 'receive' AND zinc_rate_per_kg IS NOT NULL AND zinc_rate_per_kg > 0
+      AND DATE(created_at) BETWEEN ? AND ?`, [year.start_date, year.end_date]);
+  return {
+    average_zinc_rate: rows[0]?.average_zinc_rate == null ? null : Number(rows[0].average_zinc_rate),
+    rate_count: Number(rows[0]?.rate_count || 0),
+    financial_year: year.financial_year,
+    from: year.start_date,
+    to: year.end_date,
+  };
+};
 
 const sendError = (res, error) => {
   if (!error.status) console.error('Zinc stock:', error);
@@ -15,21 +33,44 @@ const readStock = async (queryable = db) => {
 };
 
 const getZincStock = async (req, res) => {
-  try { return res.json({ success: true, data: await readStock() }); }
+  try {
+    const [stock, rate] = await Promise.all([
+      readStock(),
+      readFinancialYearAverageRate(),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        ...stock,
+        ...rate,
+      },
+    });
+  }
   catch (error) { return sendError(res, error); }
 };
 
 const getAverageZincRate = async (req, res) => {
   try {
-    const [rows] = await db.query(`SELECT ROUND(AVG(zinc_rate_per_kg), 2) AS average_zinc_rate,
-      COUNT(zinc_rate_per_kg) AS rate_count
-      FROM zinc_stock_movements
-      WHERE movement_type = 'receive' AND zinc_rate_per_kg IS NOT NULL AND zinc_rate_per_kg > 0`);
+    const rate = await readFinancialYearAverageRate();
+    return res.json({
+      success: true,
+      data: rate,
+    });
+  } catch (error) { return sendError(res, error); }
+};
+
+const getRateCalculatorContext = async (req, res) => {
+  try {
+    const [stock, expenseReport] = await Promise.all([
+      readStock(),
+      buildExpenseReport(),
+    ]);
     return res.json({
       success: true,
       data: {
-        average_zinc_rate: rows[0]?.average_zinc_rate == null ? null : Number(rows[0].average_zinc_rate),
-        rate_count: Number(rows[0]?.rate_count || 0),
+        current_zinc_rate: stock?.current_zinc_rate ?? null,
+        running_plant_cost: Number(expenseReport?.totals?.running_plant_cost || 0),
+        expense_month: expenseReport?.period?.month || null,
       },
     });
   } catch (error) { return sendError(res, error); }
@@ -124,4 +165,4 @@ const saveZincMovement = async (req, res) => {
   } finally { connection?.release(); }
 };
 
-module.exports = { getZincStock, getAverageZincRate, getZincMovements, downloadZincMovementsPdf, saveZincMovement };
+module.exports = { getZincStock, getAverageZincRate, getRateCalculatorContext, getZincMovements, downloadZincMovementsPdf, saveZincMovement };

@@ -261,7 +261,7 @@ const saveProductionEntry = async (req, res) => {
         }
 
         let planning;
-        if (existingRow) {
+        if (existingRow && (req.body.planning_item_id == null || Number(req.body.planning_item_id) === Number(existingRow.planning_item_id))) {
           const [planningRows] = await connection.query(
             `SELECT pp.id AS planning_id,
                     COALESCE(ppi.challan_no, pp.challan_no) AS challan_no,
@@ -370,8 +370,38 @@ const saveProductionEntry = async (req, res) => {
         let savedEntryId;
         let savedSrNo;
         let action;
+        let labourRemainingAfterSave = null;
 
         if (existingRow) {
+          const [consumptionRows] = await connection.query(
+            'SELECT labour_weight_id, dipping_qty FROM labour_weight_consumptions WHERE production_entry_id = ? FOR UPDATE',
+            [existingRow.id],
+          );
+          if (consumptionRows.length) {
+            const linked = consumptionRows[0];
+            const [weightRows] = await connection.query('SELECT dipping_qty, consumed_qty FROM labour_weight_entries WHERE id = ? FOR UPDATE', [linked.labour_weight_id]);
+            const nextConsumed = Number(weightRows[0].consumed_qty) - Number(linked.dipping_qty) + qty;
+            if (nextConsumed < 0 || nextConsumed > Number(weightRows[0].dipping_qty)) {
+              throw Object.assign(new Error(`This edit exceeds the ${weightRows[0].dipping_qty} NOS labour weight total.`), { status: 409 });
+            }
+            const [otherLinks] = await connection.query(
+              `SELECT p.item_id, p.material FROM labour_weight_consumptions c
+               JOIN production_entries p ON p.id = c.production_entry_id
+               WHERE c.labour_weight_id = ? AND c.production_entry_id <> ? LIMIT 1`,
+              [linked.labour_weight_id, existingRow.id],
+            );
+            if (otherLinks.length) {
+              const other = otherLinks[0];
+              const normalize = value => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+              if (other.item_id && planning.item_id
+                ? Number(other.item_id) !== Number(planning.item_id)
+                : normalize(other.material) !== normalize(assignedMaterial)) {
+                throw Object.assign(new Error('Split labour entries must remain on challans for the same material.'), { status: 409 });
+              }
+            }
+            await connection.query('UPDATE labour_weight_consumptions SET dipping_qty = ? WHERE production_entry_id = ?', [qty, existingRow.id]);
+            await connection.query("UPDATE labour_weight_entries SET consumed_qty = ?, status = IF(? >= dipping_qty, 'used', 'pending') WHERE id = ?", [nextConsumed, nextConsumed, linked.labour_weight_id]);
+          }
           await connection.query(
             `UPDATE production_entries
              SET planning_id = ?, planning_item_id = ?, item_id = ?, challan_no = ?,
@@ -425,15 +455,51 @@ const saveProductionEntry = async (req, res) => {
               throw Object.assign(new Error('Select a valid labour weight entry.'), { status: 400 });
             }
             const [labourRows] = await connection.query(
-              `SELECT id, ms_weight, dipping_qty FROM labour_weight_entries
+              `SELECT id, ms_weight, dipping_qty, consumed_qty, production_entry_id FROM labour_weight_entries
                WHERE id = ? AND status = 'pending' FOR UPDATE`,
               [labourEntryId],
             );
             if (!labourRows.length) {
               throw Object.assign(new Error('This labour weight entry was already used. Refresh and reopen the production form.'), { status: 409 });
             }
-            if (Number(labourRows[0].ms_weight) !== Number(ms_weight) || Number(labourRows[0].dipping_qty) !== qty) {
+            const labour = labourRows[0];
+            const labourRemaining = Number(labour.dipping_qty) - Number(labour.consumed_qty);
+            if (Number(labour.ms_weight) !== Number(ms_weight) || qty > labourRemaining) {
               throw Object.assign(new Error('The labour weight entry changed. Refresh and reopen the production form.'), { status: 409 });
+            }
+            if (labour.production_entry_id) {
+              const [firstRows] = await connection.query(
+                'SELECT item_id, material FROM production_entries WHERE id = ? FOR UPDATE',
+                [labour.production_entry_id],
+              );
+              const first = firstRows[0];
+              const sameItem = first?.item_id && planning.item_id && Number(first.item_id) === Number(planning.item_id);
+              const normalize = value => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+              if (!first || (!sameItem && normalize(first.material) !== normalize(assignedMaterial))) {
+                throw Object.assign(new Error('The remaining labour quantity must be assigned to a challan for the same material.'), { status: 409 });
+              }
+              if (Number(first.item_id) && Number(planning.item_id) && !sameItem) {
+                throw Object.assign(new Error('The remaining labour quantity must use the same material item.'), { status: 409 });
+              }
+            }
+            labourRemainingAfterSave = labourRemaining - qty;
+            if (labourRemainingAfterSave > 0 && !labour.production_entry_id) {
+              const [nextPlans] = await connection.query(
+                `SELECT ppi.item_id, ppi.material_description, ppi.planned_qty, ppi.completed_qty
+                 FROM production_planning_items ppi JOIN production_planning pp ON pp.id = ppi.planning_id
+                 WHERE ppi.id <> ? AND pp.deleted_at IS NULL AND pp.status = 'pending'
+                   AND ppi.status = 'pending' AND ppi.planned_qty > ppi.completed_qty`,
+                [planningItemId],
+              );
+              const normalize = value => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+              const capacity = nextPlans.filter(item =>
+                planning.item_id && item.item_id
+                  ? Number(item.item_id) === Number(planning.item_id)
+                  : normalize(item.material_description) === normalize(assignedMaterial)
+              ).reduce((sum, item) => sum + Number(item.planned_qty) - Number(item.completed_qty), 0);
+              if (capacity < labourRemainingAfterSave) {
+                throw Object.assign(new Error(`Another pending challan for the same material needs ${labourRemainingAfterSave} NOS capacity before this labour quantity can be split.`), { status: 409 });
+              }
             }
           }
           const [nextSrRows] = await connection.query(
@@ -483,8 +549,14 @@ const saveProductionEntry = async (req, res) => {
           savedEntryId = result.insertId;
           if (labour_weight_id != null) {
             await connection.query(
-              "UPDATE labour_weight_entries SET status = 'used', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-              [Number(labour_weight_id)],
+              `UPDATE labour_weight_entries SET status = IF(consumed_qty + ? >= dipping_qty, 'used', 'pending'),
+               consumed_qty = consumed_qty + ?,
+               production_entry_id = COALESCE(production_entry_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+              [qty, qty, savedEntryId, Number(labour_weight_id)],
+            );
+            await connection.query(
+              'INSERT INTO labour_weight_consumptions (labour_weight_id, production_entry_id, dipping_qty) VALUES (?, ?, ?)',
+              [Number(labour_weight_id), savedEntryId, qty],
             );
           }
           await applyProductionZinc(connection, {
@@ -496,6 +568,9 @@ const saveProductionEntry = async (req, res) => {
           action = "created";
         }
 
+        if (existingRow?.planning_id && Number(existingRow.planning_id) !== planningId) {
+          await recalculatePlanningProgress(connection, existingRow.planning_id);
+        }
         const progress = await recalculatePlanningProgress(
           connection,
           planningId,
@@ -522,7 +597,7 @@ const saveProductionEntry = async (req, res) => {
           id: planningId,
         });
         if (labour_weight_id != null && action === "created") {
-          io.emit("labour_weights_updated", { action: "used", id: Number(labour_weight_id) });
+          io.emit("labour_weights_updated", { action: labourRemainingAfterSave ? "partially_used" : "used", id: Number(labour_weight_id) });
         }
 
         const zincAlert = await notifyZincSafely({
@@ -1046,6 +1121,21 @@ const deleteProduction = async (req, res) => {
       previousKg: entry.zinc_stock_deducted_kg,
       nextKg: 0,
     });
+    const [linkedRows] = await connection.query(
+      'SELECT labour_weight_id, dipping_qty FROM labour_weight_consumptions WHERE production_entry_id = ? FOR UPDATE', [id],
+    );
+    if (linkedRows.length) {
+      const linked = linkedRows[0];
+      await connection.query('DELETE FROM labour_weight_consumptions WHERE production_entry_id = ?', [id]);
+      const [nextLinks] = await connection.query(
+        'SELECT production_entry_id FROM labour_weight_consumptions WHERE labour_weight_id = ? ORDER BY id LIMIT 1',
+        [linked.labour_weight_id],
+      );
+      await connection.query(
+        "UPDATE labour_weight_entries SET consumed_qty = GREATEST(consumed_qty - ?, 0), status = 'pending', production_entry_id = ? WHERE id = ?",
+        [linked.dipping_qty, nextLinks[0]?.production_entry_id || null, linked.labour_weight_id],
+      );
+    }
     await connection.query(
       `
       DELETE FROM production_entries
@@ -1071,6 +1161,7 @@ const deleteProduction = async (req, res) => {
       id: entry.planning_id,
     });
     io.emit("zinc_stock_updated", { action: "production_deleted" });
+    if (linkedRows.length) io.emit('labour_weights_updated', { action: 'production_deleted', id: linkedRows[0].labour_weight_id });
 
     return res.json({
       success: true,
@@ -1153,60 +1244,67 @@ const updateProductionById = async (req, res) => {
     "production_time", "dipping_qty", "kettle_temperature", "ms_weight", "gi_weight",
     "c1", "c2", "c3", "c4", "c5",
   ];
-  const [rows] = await db.query("SELECT * FROM production_entries WHERE id = ? LIMIT 1", [entryId]);
-  if (!rows.length) return res.status(404).json({ success: false, message: "Production entry not found" });
-  const current = rows[0];
-  const next = Object.fromEntries(fields.map((key) => [key, req.body[key] ?? current[key]]));
-  const qty = Number(next.dipping_qty);
-  if (!Number.isInteger(qty) || qty <= 0) {
-    return res.status(400).json({ success: false, message: "Dipping quantity must be a positive whole number" });
-  }
-  const zinc = calculateZincPercentage(next.ms_weight, next.gi_weight);
-  const weight = calculateProductionWeight(qty, next.ms_weight);
-  const coating = calculateAvgCoating([next.c1, next.c2, next.c3, next.c4, next.c5]);
-  const zincStockKg = calculateProductionZincKg(next);
-
-  if (current.planning_item_id) {
-    const [limitRows] = await db.query(
-      `SELECT ppi.planned_qty,
-              COALESCE(SUM(CASE WHEN pe.id <> ? THEN pe.dipping_qty ELSE 0 END), 0)
-                AS used_qty
-       FROM production_planning_items ppi
-       LEFT JOIN production_entries pe
-         ON pe.planning_item_id = ppi.id
-        AND COALESCE(pe.row_type, 'entry') = 'entry'
-       WHERE ppi.id = ?
-       GROUP BY ppi.id, ppi.planned_qty`,
-      [entryId, current.planning_item_id],
-    );
-    if (
-      limitRows.length &&
-      qty + Number(limitRows[0].used_qty) > Number(limitRows[0].planned_qty)
-    ) {
-      const remaining = Math.max(
-        0,
-        Number(limitRows[0].planned_qty) - Number(limitRows[0].used_qty),
-      );
-      return res.status(409).json({
-        success: false,
-        code: "PLANNED_QTY_EXCEEDED",
-        message: `Only ${remaining} NOS remain for this planned item`,
-      });
-    }
-  }
-
-  const connection = await db.getConnection();
+  let connection;
   try {
+    connection = await db.getConnection();
     await connection.beginTransaction();
+    const [rows] = await connection.query("SELECT * FROM production_entries WHERE id = ? FOR UPDATE", [entryId]);
+    if (!rows.length) throw Object.assign(new Error('Production entry not found'), { status: 404 });
+    const current = rows[0];
+    const next = Object.fromEntries(fields.map((key) => [key, req.body[key] ?? current[key]]));
+    const qty = Number(next.dipping_qty);
+    if (!Number.isInteger(qty) || qty <= 0) throw Object.assign(new Error('Dipping quantity must be a positive whole number'), { status: 400 });
+    const planningItemId = req.body.planning_item_id == null
+      ? Number(current.planning_item_id || 0)
+      : Number(req.body.planning_item_id);
+    if (req.body.planning_item_id != null && (!Number.isSafeInteger(planningItemId) || planningItemId < 1)) {
+      throw Object.assign(new Error('Select a valid planning challan item.'), { status: 400 });
+    }
+    const planningChanged = planningItemId > 0 && planningItemId !== Number(current.planning_item_id);
+    let target = null;
+    if (planningItemId > 0) {
+      const [plans] = await connection.query(
+        `SELECT ppi.id AS planning_item_id, ppi.planning_id, ppi.item_id,
+                ppi.planned_qty, COALESCE(ppi.challan_no, pp.challan_no) AS challan_no,
+                COALESCE(ppi.party_name, pp.party_name, '') AS party_name,
+                ppi.material_description
+         FROM production_planning_items ppi
+         JOIN production_planning pp ON pp.id = ppi.planning_id
+         WHERE ppi.id = ? ${planningChanged ? "AND pp.deleted_at IS NULL AND pp.status <> 'canceled'" : ''}
+         FOR UPDATE`, [planningItemId],
+      );
+      target = plans[0] || null;
+      if (!target && planningChanged) throw Object.assign(new Error('Selected challan is no longer available.'), { status: 409 });
+      if (target) {
+        const [usedRows] = await connection.query(
+          `SELECT COALESCE(SUM(dipping_qty), 0) AS used_qty FROM production_entries
+           WHERE planning_item_id = ? AND id <> ? AND COALESCE(row_type, 'entry') = 'entry'`,
+          [planningItemId, entryId],
+        );
+        const remaining = Number(target.planned_qty) - Number(usedRows[0].used_qty);
+        if (qty > remaining) throw Object.assign(new Error(`Only ${Math.max(0, remaining)} NOS remain for challan ${target.challan_no}.`), { status: 409, code: 'PLANNED_QTY_EXCEEDED' });
+      }
+    }
+    const zinc = calculateZincPercentage(next.ms_weight, next.gi_weight);
+    const weight = calculateProductionWeight(qty, next.ms_weight);
+    const coating = calculateAvgCoating([next.c1, next.c2, next.c3, next.c4, next.c5]);
+    const zincStockKg = calculateProductionZincKg(next);
     await connection.query(
       `UPDATE production_entries SET production_time=?, dipping_qty=?, kettle_temperature=?, ms_weight=?, gi_weight=?,
        zinc_percentage=?, production_weight=?, c1=?, c2=?, c3=?, c4=?, c5=?, avg_coating=?, updated_by=?,
-       zinc_stock_deducted_kg=?
+       zinc_stock_deducted_kg=?, planning_id=?, planning_item_id=?, item_id=?, challan_no=?, party_name=?, material=?
        WHERE id=?`,
       [next.production_time || null, qty, next.kettle_temperature || null,
        next.ms_weight || null, next.gi_weight || null, zinc, weight,
        next.c1 || null, next.c2 || null, next.c3 || null, next.c4 || null,
-       next.c5 || null, coating, req.user.id, zincStockKg, entryId],
+       next.c5 || null, coating, req.user.id, zincStockKg,
+       planningChanged ? target.planning_id : current.planning_id,
+       planningItemId || null,
+       planningChanged ? target.item_id : current.item_id,
+       planningChanged ? target.challan_no : current.challan_no,
+       planningChanged ? target.party_name : current.party_name,
+       planningChanged ? target.material_description : current.material,
+       entryId],
     );
     await applyProductionZinc(connection, {
       entryId,
@@ -1220,21 +1318,23 @@ const updateProductionById = async (req, res) => {
       shiftDate: current.shift_date,
       zincPercentage: zinc,
     });
-    const progress = current.planning_id
-      ? await recalculatePlanningProgress(connection, current.planning_id)
-      : null;
+    if (planningChanged && current.planning_id) await recalculatePlanningProgress(connection, current.planning_id);
+    const nextPlanningId = planningChanged ? target.planning_id : current.planning_id;
+    const progress = nextPlanningId ? await recalculatePlanningProgress(connection, nextPlanningId) : null;
     await connection.commit();
     req.app.get("io")?.emit("production_updated", { action: "history_updated", production_id: entryId });
     req.app.get("io")?.emit("zinc_stock_updated", { action: "production_updated" });
+    if (current.planning_id) req.app.get("io")?.emit("production_planning_updated", { action: "progress_updated", id: current.planning_id });
+    if (planningChanged) req.app.get("io")?.emit("production_planning_updated", { action: "progress_updated", id: nextPlanningId });
     notifyZincSafely({ entryId });
     if (progress?.status === "completed") {
-      notifyProductionFlowCompletion({ planningId: current.planning_id }).catch(
+      notifyProductionFlowCompletion({ planningId: nextPlanningId }).catch(
         (error) => console.error("Production completion notification failed:", error),
       );
     }
     return res.json({ success: true, message: "Production entry updated successfully" });
   } catch (error) {
-    await connection.rollback();
+    if (connection) await connection.rollback();
     console.error("updateProductionById:", error);
     return res.status(error.status || 500).json({
       success: false,
@@ -1242,7 +1342,7 @@ const updateProductionById = async (req, res) => {
       message: error.status ? error.message : "Could not update production entry",
     });
   } finally {
-    connection.release();
+    connection?.release();
   }
 };
 

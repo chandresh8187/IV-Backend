@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS gas_bottle_runs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  bottle_id BIGINT UNSIGNED NOT NULL,
+  position_no TINYINT UNSIGNED NOT NULL,
+  started_at DATETIME NOT NULL,
+  finished_at DATETIME NULL,
+  start_gas_kg DECIMAL(10,3) NOT NULL,
+  final_gas_kg DECIMAL(10,3) NULL,
+  consumed_gas_kg DECIMAL(10,3) NULL,
+  production_ton DECIMAL(14,3) NULL,
+  gas_kg_per_ton DECIMAL(12,3) NULL,
+  consumed_cost DECIMAL(14,2) NULL,
+  started_by INT NOT NULL,
+  finished_by INT NULL,
+  note VARCHAR(255) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_gas_runs_time (started_at, finished_at),
+  KEY idx_gas_runs_bottle (bottle_id),
+  CONSTRAINT fk_gas_run_bottle FOREIGN KEY (bottle_id) REFERENCES gas_bottles(id),
+  CONSTRAINT fk_gas_run_started_user FOREIGN KEY (started_by) REFERENCES users(id),
+  CONSTRAINT fk_gas_run_finished_user FOREIGN KEY (finished_by) REFERENCES users(id)
+) ENGINE=InnoDB;

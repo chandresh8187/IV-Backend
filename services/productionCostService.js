@@ -8,9 +8,9 @@ const round = (value, decimals = 2) => {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 };
 
-const calculateProductionCost = ({ zincPercentage, averageZincRate, runningPlantCost }) => {
+const calculateProductionCost = ({ zincPercentage, currentZincRate, runningPlantCost }) => {
   const zinc = Number(zincPercentage);
-  const rate = Number(averageZincRate);
+  const rate = Number(currentZincRate);
   const plantCost = Number(runningPlantCost);
   if (![zinc, rate, plantCost].every(Number.isFinite) || zinc < 0 || rate <= 0 || plantCost < 0) return null;
   return round((rate * zinc / 100) + plantCost + PRODUCTION_PROFIT_PER_KG, 2);
@@ -27,19 +27,17 @@ const refreshProductionCost = async (queryable, { entryId, shiftDate, zincPercen
     ROUND(COALESCE(SUM(COALESCE(gi_weight, 0) * COALESCE(dipping_qty, 0)), 0), 3) total_gi_kg,
     COUNT(DISTINCT shift_date) production_days
     FROM production_entries WHERE shift_date BETWEEN ? AND ? AND COALESCE(row_type, 'entry') = 'entry'`, [from, to]);
-  const [rateRows] = await queryable.query(`SELECT ROUND(AVG(zinc_rate_per_kg), 2) average_zinc_rate
-    FROM zinc_stock_movements
-    WHERE movement_type = 'receive' AND zinc_rate_per_kg IS NOT NULL AND zinc_rate_per_kg > 0`);
+  const [rateRows] = await queryable.query('SELECT current_zinc_rate FROM zinc_stock WHERE id = 1');
   const runningPlantCost = calculateExpenseReport({
     settings: normalizeExpenseSettings(settingsRows[0]), production: productionRows[0],
     stock: {}, purchasedZincKg: 0, recoveredZincKg: 0,
   }).totals.running_plant_cost;
-  const averageZincRate = Number(rateRows[0]?.average_zinc_rate || 0);
-  const productionCost = calculateProductionCost({ zincPercentage, averageZincRate, runningPlantCost });
+  const currentZincRate = Number(rateRows[0]?.current_zinc_rate || 0);
+  const productionCost = calculateProductionCost({ zincPercentage, currentZincRate, runningPlantCost });
   await queryable.query(`UPDATE production_entries SET
     production_cost = ?, production_cost_zinc_rate = ?, production_cost_plant_cost = ?, production_cost_profit = ?
-    WHERE id = ?`, [productionCost, averageZincRate || null, runningPlantCost, PRODUCTION_PROFIT_PER_KG, entryId]);
-  return { production_cost: productionCost, average_zinc_rate: averageZincRate || null,
+    WHERE id = ?`, [productionCost, currentZincRate || null, runningPlantCost, PRODUCTION_PROFIT_PER_KG, entryId]);
+  return { production_cost: productionCost, current_zinc_rate: currentZincRate || null,
     running_plant_cost: runningPlantCost, profit: PRODUCTION_PROFIT_PER_KG };
 };
 
