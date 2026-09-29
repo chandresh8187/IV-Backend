@@ -234,6 +234,14 @@ const getHistoryPlanningSummary = async (req, res) => {
            AS remaining_qty,
          COALESCE(ppi.target_zinc_percentage, pp.target_zinc_percentage)
            AS target_zinc_percentage,
+         ROUND(SUM(CASE WHEN pe.ms_weight IS NOT NULL AND pe.gi_weight IS NOT NULL
+           THEN GREATEST(pe.gi_weight - pe.ms_weight, 0) * pe.dipping_qty ELSE 0 END), 3)
+           AS actual_zinc_consumption_kg,
+         ROUND(100 * SUM(CASE WHEN pe.ms_weight IS NOT NULL AND pe.gi_weight IS NOT NULL
+           THEN GREATEST(pe.gi_weight - pe.ms_weight, 0) * pe.dipping_qty ELSE 0 END)
+           / NULLIF(SUM(CASE WHEN pe.ms_weight IS NOT NULL AND pe.gi_weight IS NOT NULL
+             THEN pe.ms_weight * pe.dipping_qty ELSE 0 END), 0), 2)
+           AS actual_zinc_percentage,
          COALESCE(ppi.status, pp.status) AS status,
          COALESCE(MIN(ppi.sequence_no), 1) AS sequence_no,
          COALESCE(SUM(CASE WHEN LOWER(pe.shift_name) = 'day'

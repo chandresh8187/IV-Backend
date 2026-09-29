@@ -49,6 +49,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
       return [[shift]];
     }
     if (sql.includes('production_edit_grants')) return [[]];
+    if (sql.includes('FROM labour_weight_consumptions')) return [[]];
     if (sql.includes('AS used_qty')) return [[{ used_qty: usedQty }]];
     if (sql.includes('AS next_sr_no')) return [[{ next_sr_no: 4 }]];
     if (sql.includes('FROM production_planning')) return [[plan]];

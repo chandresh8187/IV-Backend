@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 function fixture({ secondItem = 7, nextCapacity = 30 } = {}) {
-  const weight = { id: 9, ms_weight: 12, dipping_qty: 40, consumed_qty: 0, production_entry_id: null, status: 'pending' };
+  const weight = { id: 9, ms_weight: 12, dipping_qty: 40, consumed_qty: 0, production_entry_id: null, status: 'pending', pickling_duration_seconds: 206, flux_duration_seconds: 93, hot_drier_duration_seconds: 60 };
   const writes = [];
   let nextId = 101;
   const plans = {
@@ -70,6 +70,10 @@ test('40 labour NOS can save 10 then 30 on same-material challans', async () => 
   assert.equal(f.weight.consumed_qty, 40);
   assert.equal(f.weight.status, 'used');
   assert.equal(f.writes.filter(write => write.sql.includes('INSERT INTO labour_weight_consumptions')).length, 2);
+  for (const insert of f.writes.filter(write => write.sql.includes('INSERT INTO production_entries'))) {
+    assert.deepEqual(Array.from(insert.params.slice(23, 26)), [206, 93, 60]);
+    assert.equal((insert.sql.match(/\?/g) || []).length, insert.params.length);
+  }
 });
 
 test('split refuses a different material or insufficient same-material capacity', async () => {

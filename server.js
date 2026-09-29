@@ -240,6 +240,28 @@ const startServer = async () => {
   // hPanel can launch server.js directly and bypass package.json scripts.
   // Always migrate before accepting requests so code and schema stay aligned.
   await runMigrations({ command: "up", dryRun: false });
+  const { expireDueTimers } = require('./services/labourTimerService');
+  let timerSweepRunning = false;
+  const sweepTimers = async () => {
+    if (timerSweepRunning) return;
+    timerSweepRunning = true;
+    try { await expireDueTimers(app.get('io')); }
+    catch (error) { console.error('Labour timer expiry failed:', error); }
+    finally { timerSweepRunning = false; }
+  };
+  setInterval(sweepTimers, 1000).unref();
+  sweepTimers();
+  const { checkStockAlerts } = require('./services/stockAlertService');
+  let stockCheckRunning = false;
+  const checkStocks = async () => {
+    if (stockCheckRunning) return;
+    stockCheckRunning = true;
+    try { await checkStockAlerts(); }
+    catch (error) { console.error('Stock alert check failed:', error); }
+    finally { stockCheckRunning = false; }
+  };
+  setInterval(checkStocks, 30000).unref();
+  checkStocks();
 
   await new Promise((resolve, reject) => {
     const onError = (error) => {

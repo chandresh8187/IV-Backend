@@ -1,221 +1,93 @@
-const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const PAGE = { width: 841.89, height: 595.28, margin: 42 };
-const COLORS = {
-  navy: rgb(0.04, 0.12, 0.23),
-  blue: rgb(0.15, 0.39, 0.92),
-  text: rgb(0.1, 0.18, 0.3),
-  muted: rgb(0.36, 0.42, 0.5),
-  line: rgb(0.86, 0.89, 0.93),
-  soft: rgb(0.95, 0.97, 0.99),
-  white: rgb(1, 1, 1),
-};
-
-const formatNumber = (value) =>
-  Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
-
-const fitText = (text, font, size, maxWidth) => {
-  const value = String(text || "-");
-  if (font.widthOfTextAtSize(value, size) <= maxWidth) return value;
-  let output = value;
-  while (output.length > 1 && font.widthOfTextAtSize(`${output}...`, size) > maxWidth) {
-    output = output.slice(0, -1);
-  }
-  return `${output}...`;
+const C = { navy: rgb(.04,.12,.23), blue: rgb(.15,.39,.82), green: rgb(.08,.48,.32), amber: rgb(.62,.36,.08), text: rgb(.1,.18,.3), muted: rgb(.36,.42,.5), line: rgb(.86,.89,.93), soft: rgb(.96,.97,.99), white: rgb(1,1,1) };
+const num = value => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const fit = (value, font, size, width) => {
+  let result = String(value || '-').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim() || '-';
+  if (font.widthOfTextAtSize(result, size) <= width) return result;
+  while (result.length > 1 && font.widthOfTextAtSize(`${result}...`, size) > width) result = result.slice(0, -1);
+  return `${result}...`;
 };
 
 const generateProductionPlanningPdf = async ({ planning, items }) => {
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  let page;
-  let y;
-
+  const width = PAGE.width - PAGE.margin * 2;
+  let page, y;
+  const text = (value, x, baseline, size = 9, font = regular, color = C.text) => page.drawText(value, { x, y: baseline, size, font, color });
+  const label = (value, x, baseline, color = C.muted) => text(value, x, baseline, 8, bold, color);
   const addPage = () => {
     page = pdf.addPage([PAGE.width, PAGE.height]);
-    y = PAGE.height - PAGE.margin;
-    page.drawText("IV SQUARE STRUCTURE INDIA PVT LTD", {
-      x: PAGE.margin,
-      y,
-      size: 16,
-      font: bold,
-      color: COLORS.navy,
-    });
-    page.drawText("PRODUCTION PLANNING", {
-      x: PAGE.width - PAGE.margin - 168,
-      y: y + 1,
-      size: 12,
-      font: bold,
-      color: COLORS.blue,
-    });
-    y -= 20;
-    page.drawLine({
-      start: { x: PAGE.margin, y },
-      end: { x: PAGE.width - PAGE.margin, y },
-      thickness: 2,
-      color: COLORS.blue,
-    });
-    y -= 28;
+    y = PAGE.height - PAGE.margin - 44;
   };
-
-  const drawTableHeader = () => {
-    const columns = [
-      { label: "#", x: 46, width: 22 },
-      { label: "Challan", x: 70, width: 140 },
-      { label: "Party", x: 215, width: 135 },
-      { label: "Material", x: 355, width: 160 },
-      { label: "Planned", x: 520, width: 55 },
-      { label: "Completed", x: 580, width: 60 },
-      { label: "Balance", x: 645, width: 55 },
-      { label: "Zn target", x: 705, width: 65 },
-    ];
-    page.drawRectangle({
-      x: PAGE.margin,
-      y: y - 20,
-      width: PAGE.width - PAGE.margin * 2,
-      height: 24,
-      color: COLORS.navy,
-    });
-    columns.forEach((column) => {
-      page.drawText(column.label, {
-        x: column.x,
-        y: y - 13,
-        size: 8.5,
-        font: bold,
-        color: COLORS.white,
-      });
-    });
-    y -= 24;
+  const stat = (x, top, statWidth, title, value, color) => {
+    page.drawRectangle({ x, y: top - 43, width: statWidth, height: 43, color: C.soft, borderColor: C.line, borderWidth: .7 });
+    label(title, x + 10, top - 14);
+    text(value, x + 10, top - 32, 13, bold, color);
   };
 
   addPage();
-  page.drawRectangle({
-    x: PAGE.margin,
-    y: y - 70,
-    width: PAGE.width - PAGE.margin * 2,
-    height: 78,
-    color: COLORS.soft,
-    borderColor: COLORS.line,
-    borderWidth: 1,
-  });
-  page.drawText("Production flow", {
-    x: 56,
-    y: y - 14,
-    size: 8,
-    font: regular,
-    color: COLORS.muted,
-  });
-  page.drawText(`#${planning.id || "-"}`, {
-    x: 56,
-    y: y - 34,
-    size: 15,
-    font: bold,
-    color: COLORS.navy,
-  });
-  page.drawText("Status", {
-    x: 650,
-    y: y - 14,
-    size: 8,
-    font: regular,
-    color: COLORS.muted,
-  });
-  page.drawText(String(planning.status || "pending").toUpperCase(), {
-    x: 650,
-    y: y - 34,
-    size: 11,
-    font: bold,
-    color: COLORS.blue,
-  });
-  page.drawText(
-    `Items: ${items.length}    Planned: ${formatNumber(planning.planned_qty)} NOS    Completed: ${formatNumber(planning.completed_qty)} NOS`,
-    {
-      x: 56,
-      y: y - 57,
-      size: 9,
-      font: regular,
-      color: COLORS.text,
-    },
-  );
-  y -= 102;
-  page.drawText("PLANNED ITEM FLOW", {
-    x: PAGE.margin,
-    y,
-    size: 10,
-    font: bold,
-    color: COLORS.navy,
-  });
-  y -= 14;
-  drawTableHeader();
+  const plannedTotal = items.reduce((sum, item) => sum + Number(item.planned_qty || 0), 0);
+  const producedTotal = items.reduce((sum, item) => sum + Number(item.completed_qty || 0), 0);
+  page.drawRectangle({ x: PAGE.margin, y: y - 92, width, height: 92, color: C.white, borderColor: C.line, borderWidth: 1 });
+  label(`FLOW #${planning.id || '-'}  |  ${items.length} CHALLAN${items.length === 1 ? '' : 'S'}`, PAGE.margin + 14, y - 16, C.blue);
+  text(`Status: ${String(planning.status || 'pending').toUpperCase()}`, PAGE.width - PAGE.margin - 135, y - 16, 8, bold, C.navy);
+  const statWidth = (width - 48) / 3;
+  stat(PAGE.margin + 14, y - 27, statWidth, 'PLANNED QTY', `${num(plannedTotal)} NOS`, C.navy);
+  stat(PAGE.margin + 14 + statWidth + 10, y - 27, statWidth, 'PRODUCED QTY', `${num(producedTotal)} NOS`, C.green);
+  stat(PAGE.margin + 14 + (statWidth + 10) * 2, y - 27, statWidth, 'PENDING QTY', `${num(Math.max(0, plannedTotal - producedTotal))} NOS`, C.amber);
+  y -= 112;
+  label('CHALLAN PROGRESS', PAGE.margin, y, C.navy);
+  y -= 15;
 
   items.forEach((item, index) => {
-    if (y < 80) {
+    const height = 129;
+    if (y - height < 52) {
       addPage();
-      page.drawText("PLANNED ITEM FLOW (CONTINUED)", {
-        x: PAGE.margin,
-        y,
-        size: 10,
-        font: bold,
-        color: COLORS.navy,
-      });
-      y -= 14;
-      drawTableHeader();
+      label('CHALLAN PROGRESS (CONTINUED)', PAGE.margin, y, C.navy);
+      y -= 16;
     }
-
-    const rowY = y - 20;
-    if (index % 2 === 1) {
-      page.drawRectangle({
-        x: PAGE.margin,
-        y: rowY,
-        width: PAGE.width - PAGE.margin * 2,
-        height: 26,
-        color: COLORS.soft,
-      });
-    }
-    const values = [
-      String(index + 1),
-      fitText(item.challan_no, regular, 8.5, 136),
-      fitText(item.party_name, regular, 8.5, 130),
-      fitText(item.material_description || item.item_name, regular, 8.5, 155),
-      formatNumber(item.planned_qty),
-      formatNumber(item.completed_qty),
-      formatNumber(Number(item.planned_qty) - Number(item.completed_qty)),
-      `${formatNumber(item.target_zinc_percentage)}%`,
-    ];
-    const positions = [46, 70, 215, 355, 520, 580, 645, 705];
-    values.forEach((value, valueIndex) => {
-      page.drawText(value, {
-        x: positions[valueIndex],
-        y: rowY + 9,
-        size: 9,
-        font: valueIndex === 3 ? bold : regular,
-        color: COLORS.text,
-      });
+    const top = y;
+    const planned = Number(item.planned_qty || 0);
+    const produced = Number(item.completed_qty || 0);
+    const pending = Math.max(0, planned - produced);
+    const percent = planned > 0 ? Math.min(100, Math.max(0, produced / planned * 100)) : 0;
+    page.drawRectangle({ x: PAGE.margin, y: top - height, width, height, color: C.white, borderColor: C.line, borderWidth: 1 });
+    page.drawRectangle({ x: PAGE.margin, y: top - 31, width, height: 31, color: C.soft });
+    text(`${index + 1}.  ${fit(item.challan_no, bold, 11, 350)}`, PAGE.margin + 12, top - 20, 11, bold, C.navy);
+    text(`Zinc target: ${num(item.target_zinc_percentage)}%`, PAGE.margin + 445, top - 20, 8, bold, C.muted);
+    text(pending === 0 && planned > 0 ? 'COMPLETED' : 'IN PROGRESS', PAGE.width - PAGE.margin - 104, top - 20, 9, bold, pending === 0 ? C.green : C.amber);
+    label('PARTY', PAGE.margin + 12, top - 48);
+    text(fit(item.party_name, regular, 9, 315), PAGE.margin + 12, top - 61);
+    label('MATERIAL', PAGE.margin + 340, top - 48);
+    text(fit(item.material_description || item.item_name, regular, 9, 320), PAGE.margin + 340, top - 61);
+    [
+      ['PLANNED', `${num(planned)} NOS`, C.navy],
+      ['PRODUCED', `${num(produced)} NOS`, C.green],
+      ['PENDING', `${num(pending)} NOS`, C.amber],
+    ].forEach(([title, value, color], i) => {
+      const x = PAGE.margin + 12 + i * (statWidth + 12);
+      label(title, x, top - 76);
+      text(value, x, top - 93, 12, bold, color);
     });
-    page.drawLine({
-      start: { x: PAGE.margin, y: rowY },
-      end: { x: PAGE.width - PAGE.margin, y: rowY },
-      thickness: 0.5,
-      color: COLORS.line,
-    });
-    y -= 26;
+    const barX = PAGE.margin + 12, barWidth = width - 135;
+    page.drawRectangle({ x: barX, y: top - 118, width: barWidth, height: 5, color: C.line });
+    if (percent > 0) page.drawRectangle({ x: barX, y: top - 118, width: barWidth * percent / 100, height: 5, color: C.blue });
+    text(`${num(percent)}% done`, PAGE.width - PAGE.margin - 105, top - 119, 8, bold, C.blue);
+    y -= height + 13;
   });
 
-  y -= 20;
-  page.drawText("Production follows the item order shown above.", {
-    x: PAGE.margin,
-    y,
-    size: 9,
-    font: regular,
-    color: COLORS.muted,
+  const pages = pdf.getPages();
+  pages.forEach((current, index) => {
+    current.drawText('IV SQUARE STRUCTURE INDIA PVT LTD', { x: PAGE.margin, y: PAGE.height - PAGE.margin, size: 15, font: bold, color: C.navy });
+    current.drawText('PRODUCTION PLANNING REPORT', { x: PAGE.width - PAGE.margin - 220, y: PAGE.height - PAGE.margin + 1, size: 11, font: bold, color: C.blue });
+    current.drawLine({ start: { x: PAGE.margin, y: PAGE.height - PAGE.margin - 20 }, end: { x: PAGE.width - PAGE.margin, y: PAGE.height - PAGE.margin - 20 }, thickness: 2, color: C.blue });
+    current.drawLine({ start: { x: PAGE.margin, y: 44 }, end: { x: PAGE.width - PAGE.margin, y: 44 }, thickness: .7, color: C.line });
+    current.drawText(`Generated ${new Date().toLocaleString('en-IN')}`, { x: PAGE.margin, y: 30, size: 7.5, font: regular, color: C.muted });
+    current.drawText(`Page ${index + 1} of ${pages.length}`, { x: PAGE.width - PAGE.margin - 58, y: 30, size: 7.5, font: regular, color: C.muted });
   });
-  page.drawText(`Generated ${new Date().toLocaleString("en-IN")}`, {
-    x: PAGE.margin,
-    y: 32,
-    size: 7.5,
-    font: regular,
-    color: COLORS.muted,
-  });
-
   return Buffer.from(await pdf.save());
 };
 

@@ -5,6 +5,7 @@ const { generateZincStockPdf } = require('../services/pdf/zincStockPdfGenerator'
 const { hasPermission } = require('../services/permissionService');
 const { getConfiguredCurrentFinancialYear } = require('../services/financialYearService');
 const { buildReport: buildExpenseReport } = require('./expenseReportController');
+const { checkStockAlerts, ZINC_LIMIT_KG } = require('../services/stockAlertService');
 
 const readFinancialYearAverageRate = async (queryable = db) => {
   const year = await getConfiguredCurrentFinancialYear(queryable);
@@ -43,6 +44,8 @@ const getZincStock = async (req, res) => {
       data: {
         ...stock,
         ...rate,
+        low_stock: stock.initialized && Number(stock.plant_kg) <= ZINC_LIMIT_KG,
+        stock_alert_threshold_kg: ZINC_LIMIT_KG,
       },
     });
   }
@@ -152,6 +155,7 @@ const saveZincMovement = async (req, res) => {
       movement.zincRatePerKg || null, next.plant_kg, next.kettle_kg, movement.note, req.user.id]);
     await connection.commit();
     transaction = false;
+    checkStockAlerts().catch(error => console.error('Stock alert check failed:', error));
     req.app.get('io')?.emit('zinc_stock_updated', {});
     const message = movement.action === 'transfer'
       ? 'Zinc transferred from plant to kettle.'

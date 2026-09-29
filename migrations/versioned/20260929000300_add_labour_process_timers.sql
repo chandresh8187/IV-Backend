@@ -1,0 +1,1 @@
+ALTER TABLE labour_weight_entries ADD COLUMN pickling_started_at TIMESTAMP(3) NULL, ADD COLUMN pickling_duration_seconds INT UNSIGNED NULL, ADD COLUMN flux_started_at TIMESTAMP(3) NULL, ADD COLUMN flux_duration_seconds INT UNSIGNED NULL, ADD COLUMN hot_drier_started_at TIMESTAMP(3) NULL, ADD COLUMN hot_drier_duration_seconds INT UNSIGNED NULL;

@@ -439,9 +439,13 @@ const drawSummaryTable = ({ page, fonts, summary, topY, tableWidth }) => {
 const standardColumns = [
   { label: 'Sr', key: 'sr_no', width: 24, lines: 1 },
   { label: 'Time', key: 'production_time', width: 40, lines: 1 },
-  { label: 'Challan No.', key: 'challan_no', width: 62, lines: 2 },
-  { label: 'Party Name', key: 'party_name', width: 85, lines: 3 },
-  { label: 'Material Description', key: 'material', width: 113, lines: 4 },
+  { label: 'Pickle', key: 'pickling_duration_seconds', width: 25, lines: 2 },
+  { label: 'Flux', key: 'flux_duration_seconds', width: 25, lines: 2 },
+  { label: 'Drier', key: 'hot_drier_duration_seconds', width: 25, lines: 2 },
+  { label: 'Zinc', key: 'zinc_kettle_duration_seconds', width: 25, lines: 2 },
+  { label: 'Challan No.', key: 'challan_no', width: 57, lines: 2 },
+  { label: 'Party Name', key: 'party_name', width: 75, lines: 3 },
+  { label: 'Material Description', key: 'material', width: 103, lines: 4 },
   { label: 'Kettle Temp', key: 'kettle_temperature', width: 38, lines: 1 },
   { label: 'Dipping Qty', key: 'dipping_qty', width: 36, lines: 1 },
   { label: 'MS Wt.', key: 'ms_weight', width: 40, lines: 1 },
@@ -460,13 +464,17 @@ const challanColumns = [
   { label: 'Production Date', key: 'shift_date', width: 54, lines: 2 },
   { label: 'Shift', key: 'shift_name', width: 36, lines: 1 },
   { label: 'Time', key: 'production_time', width: 46, lines: 1 },
-  { label: 'Challan No.', key: 'challan_no', width: 55, lines: 2 },
-  { label: 'Party Name', key: 'party_name', width: 77, lines: 3 },
-  { label: 'Material Description', key: 'material', width: 95, lines: 4 },
-  { label: 'Kettle Temp', key: 'kettle_temperature', width: 34, lines: 1 },
+  { label: 'Pickle', key: 'pickling_duration_seconds', width: 25, lines: 2 },
+  { label: 'Flux', key: 'flux_duration_seconds', width: 25, lines: 2 },
+  { label: 'Drier', key: 'hot_drier_duration_seconds', width: 25, lines: 2 },
+  { label: 'Zinc', key: 'zinc_kettle_duration_seconds', width: 25, lines: 2 },
+  { label: 'Challan No.', key: 'challan_no', width: 48, lines: 2 },
+  { label: 'Party Name', key: 'party_name', width: 65, lines: 3 },
+  { label: 'Material Description', key: 'material', width: 82, lines: 4 },
+  { label: 'Kettle Temp', key: 'kettle_temperature', width: 30, lines: 1 },
   { label: 'Dipping Qty', key: 'dipping_qty', width: 34, lines: 1 },
-  { label: 'MS Wt.', key: 'ms_weight', width: 36, lines: 1 },
-  { label: 'GI Wt.', key: 'gi_weight', width: 36, lines: 1 },
+  { label: 'MS Wt.', key: 'ms_weight', width: 32, lines: 1 },
+  { label: 'GI Wt.', key: 'gi_weight', width: 32, lines: 1 },
   { label: 'Zn %', key: 'zinc_percentage', width: 32, lines: 1 },
   { label: 'C1', key: 'c1', width: 26, lines: 1 },
   { label: 'C2', key: 'c2', width: 26, lines: 1 },
@@ -519,6 +527,14 @@ const drawTableHeader = (page, fonts, y, columns) => {
 const getCellValue = (row, key) => {
   const value = row?.[key];
   if (key === 'production_time') return formatTime12Hour(value);
+  if (['pickling_duration_seconds', 'flux_duration_seconds', 'hot_drier_duration_seconds', 'zinc_kettle_duration_seconds'].includes(key)) {
+    if (value == null) return '-';
+    const seconds = Math.max(0, Math.floor(Number(value) || 0));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainder = seconds % 60;
+    return `${hours ? `${hours}h` : ''}${minutes ? `${minutes}m` : ''}${remainder || (!hours && !minutes) ? `${remainder}s` : ''}`;
+  }
   if (key === 'shift_name') return String(safeValue(value)).toUpperCase();
   if (key === 'ms_weight' || key === 'gi_weight') return safeValue(value);
   if (key === 'zinc_percentage') {

@@ -1,0 +1,1 @@
+ALTER TABLE labour_weight_entries ADD COLUMN pickling_limit_seconds INT NULL, ADD COLUMN flux_limit_seconds INT NULL, ADD COLUMN hot_drier_limit_seconds INT NULL, ADD COLUMN zinc_kettle_started_at TIMESTAMP(3) NULL, ADD COLUMN zinc_kettle_duration_seconds INT NULL, ADD COLUMN zinc_kettle_client_started_at_ms BIGINT UNSIGNED NULL, ADD COLUMN zinc_kettle_limit_seconds INT NULL;

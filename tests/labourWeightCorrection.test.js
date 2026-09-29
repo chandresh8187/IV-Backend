@@ -23,6 +23,9 @@ function fixture(role = 'supervisor') {
     '../services/productionZincStockService': { calculateProductionZincKg: ({ dipping_qty, ms_weight, gi_weight }) => (gi_weight - ms_weight) * dipping_qty, applyProductionZinc: async (_, values) => { zinc.push(values); } },
     '../services/productionPlanningFlowService': { recalculatePlanningProgress: async (_, id) => { plans.push(id); } },
     '../services/productionCostService': { refreshProductionCost: async (_, values) => { costs.push(values); } },
+    '../services/permissionService': { hasPermission: async () => true },
+    '../services/appSettingsService': { getSetting: async () => ({ pickling: 7, flux: 2, hot_drier: 5, zinc_kettle: 5 }) },
+    '../services/labourTimerService': { DEFAULT_LIMIT_SECONDS: {}, expireDueTimers: async () => {} },
     luxon: require('luxon'),
   };
   const module = { exports: {} };

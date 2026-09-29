@@ -17,6 +17,11 @@ const {
 const {
   getProductionPlanningFile,
 } = require("../controllers/productionPlanningFileController");
+const { generateCompletedPlanningItemReport } = require('../controllers/productionReportController');
+
+router.get('/items/:itemId/production-report', authMiddleware,
+  roleMiddleware(["admin", "superadmin", "plant_manager"], "planning.view"),
+  generateCompletedPlanningItemReport);
 
 router.post(
   "/",

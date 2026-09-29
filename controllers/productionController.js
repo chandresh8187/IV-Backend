@@ -371,6 +371,7 @@ const saveProductionEntry = async (req, res) => {
         let savedSrNo;
         let action;
         let labourRemainingAfterSave = null;
+        let labourProcessTimes = null;
 
         if (existingRow) {
           const [consumptionRows] = await connection.query(
@@ -455,7 +456,8 @@ const saveProductionEntry = async (req, res) => {
               throw Object.assign(new Error('Select a valid labour weight entry.'), { status: 400 });
             }
             const [labourRows] = await connection.query(
-              `SELECT id, ms_weight, dipping_qty, consumed_qty, production_entry_id FROM labour_weight_entries
+              `SELECT id, ms_weight, dipping_qty, consumed_qty, production_entry_id,
+                      pickling_duration_seconds, flux_duration_seconds, hot_drier_duration_seconds, zinc_kettle_duration_seconds FROM labour_weight_entries
                WHERE id = ? AND status = 'pending' FOR UPDATE`,
               [labourEntryId],
             );
@@ -463,6 +465,7 @@ const saveProductionEntry = async (req, res) => {
               throw Object.assign(new Error('This labour weight entry was already used. Refresh and reopen the production form.'), { status: 409 });
             }
             const labour = labourRows[0];
+            labourProcessTimes = labour;
             const labourRemaining = Number(labour.dipping_qty) - Number(labour.consumed_qty);
             if (Number(labour.ms_weight) !== Number(ms_weight) || qty > labourRemaining) {
               throw Object.assign(new Error('The labour weight entry changed. Refresh and reopen the production form.'), { status: 409 });
@@ -514,9 +517,10 @@ const saveProductionEntry = async (req, res) => {
                planning_item_id, item_id, challan_no, party_name,
                material, production_time, dipping_qty, kettle_temperature,
                ms_weight, gi_weight, zinc_percentage, production_weight,
-               c1, c2, c3, c4, c5, avg_coating, row_type, created_by,
+               c1, c2, c3, c4, c5, avg_coating,
+               pickling_duration_seconds, flux_duration_seconds, hot_drier_duration_seconds, zinc_kettle_duration_seconds, row_type, created_by,
                zinc_stock_deducted_kg, contractor_id)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?, ?, ?)`,
             [
               activeShift.id,
               activeShift.shift_date,
@@ -541,6 +545,10 @@ const saveProductionEntry = async (req, res) => {
               c4 || null,
               c5 || null,
               avgCoating,
+              labourProcessTimes?.pickling_duration_seconds ?? null,
+              labourProcessTimes?.flux_duration_seconds ?? null,
+              labourProcessTimes?.hot_drier_duration_seconds ?? null,
+              labourProcessTimes?.zinc_kettle_duration_seconds ?? null,
               req.user.id,
               zincStockKg,
               contractorId,

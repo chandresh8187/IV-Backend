@@ -9,6 +9,7 @@ const PERMISSIONS = [
   { key: 'gas.report', group: 'Gas Management', label: 'Generate gas PDF report', description: 'Generate bottle purchase, consumption, production, and cost reports.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: ['superadmin', 'supervisor', 'labour'] },
   { key: 'labour_weights.create', group: 'Labour Weights', label: 'Add labour weights', description: 'Add MS weight and dip quantity to the production queue.', defaultRoles: ['labour'] },
+  { key: 'labour_weights.timer', group: 'Labour Weights', label: 'Run labour process timers', description: 'Start and stop pickling, flux and hot drier timers for a labour weight.', defaultRoles: ['labour', 'supervisor', 'superadmin'] },
   { key: 'labour_weights.edit', group: 'Labour Weights', label: 'Edit labour weights', description: 'Correct labour weights and linked production entries.', defaultRoles: ['superadmin', 'supervisor'] },
   { key: 'chat.view', group: 'Production', label: 'Use plant chat', description: 'View users and exchange production messages.', defaultRoles: ALL_ROLES },
   { key: 'zinc_stock.view', group: 'Zinc Stock', label: 'View zinc stock', description: 'View plant and kettle zinc balances and transaction history.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },

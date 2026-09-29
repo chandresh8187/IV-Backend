@@ -1,0 +1,1 @@
+ALTER TABLE labour_weight_entries ADD COLUMN pickling_client_started_at_ms BIGINT UNSIGNED NULL, ADD COLUMN flux_client_started_at_ms BIGINT UNSIGNED NULL, ADD COLUMN hot_drier_client_started_at_ms BIGINT UNSIGNED NULL;

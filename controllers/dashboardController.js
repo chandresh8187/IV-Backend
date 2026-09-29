@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { readStockLevels, ZINC_LIMIT_KG, GAS_LIMIT_BOTTLES } = require('../services/stockAlertService');
 const {
   ensureAutomaticShift,
   getCurrentShiftInfo,
@@ -12,6 +13,13 @@ const getDashboardData = async (req, res) => {
     const shiftInfo = getCurrentShiftInfo(null, schedule);
     const currentShift = activeShift?.shift_name || shiftInfo.shift_name;
     const todayDate = activeShift?.shift_date || shiftInfo.shift_date;
+    const stockLevels = await readStockLevels();
+    const stockAlerts = [
+      ...(stockLevels.zinc != null && stockLevels.zinc <= ZINC_LIMIT_KG
+        ? [`Plant zinc stock is only ${stockLevels.zinc.toLocaleString('en-IN')} kg. Receive zinc soon.`] : []),
+      ...(stockLevels.gas != null && stockLevels.gas <= GAS_LIMIT_BOTTLES
+        ? [`Gas stock is only ${stockLevels.gas} filled bottle${stockLevels.gas === 1 ? '' : 's'}. Receive new bottles soon.`] : []),
+    ];
 
     const [plantRows] = await db.query(
       `
@@ -183,6 +191,7 @@ const getDashboardData = async (req, res) => {
       message: "Dashboard data fetched successfully",
       data: {
         today_date: todayDate,
+        stock_alerts: stockAlerts,
 
         plant_status: plantStatus,
 

@@ -3,6 +3,7 @@ const { getConfiguredCurrentFinancialYear } = require('../services/financialYear
 const { financialYearMonth, summarizeZincMovements } = require('../services/monthlyReportService');
 const { normalizeExpenseSettings, calculateExpenseReport } = require('../services/expenseReportService');
 const { generateMonthlyReportPdf } = require('../services/pdf/monthlyReportPdfGenerator');
+const { generateDailyProductionPdf } = require('../services/pdf/dailyProductionPdfGenerator');
 
 const numeric = rows => rows.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value])));
 
@@ -11,7 +12,7 @@ const buildMonthlyReport = async ({ month, financialYearId }) => {
   if (financialYearId != null && Number(financialYearId) !== Number(year.id)) throw Object.assign(new Error('The financial year changed. Refresh and try again.'), { status: 409 });
   const period = financialYearMonth(year, month);
   const params = [period.from, period.to];
-  const [productionResult, shiftsResult, materialsResult, contractorsResult, planningResult, openingResult, movementsResult, byproductsResult, settingsResult, historicalSettingsResult] = await Promise.all([
+  const [productionResult, shiftsResult, materialsResult, contractorsResult, planningResult, openingResult, movementsResult, byproductsResult, settingsResult, historicalSettingsResult, dailyResult] = await Promise.all([
     db.query(`SELECT COUNT(*) entry_count, COUNT(DISTINCT shift_date) production_days, COALESCE(SUM(dipping_qty),0) quantity,
       ROUND(COALESCE(SUM(COALESCE(ms_weight,0)*COALESCE(dipping_qty,0)),0),3) total_ms_kg,
       ROUND(COALESCE(SUM(COALESCE(gi_weight,0)*COALESCE(dipping_qty,0)),0),3) total_gi_kg
@@ -47,6 +48,15 @@ const buildMonthlyReport = async ({ month, financialYearId }) => {
       FROM zinc_byproduct_transactions WHERE transaction_date BETWEEN ? AND ?`, params),
     db.query('SELECT * FROM expense_settings WHERE id=1'),
     db.query(`SELECT * FROM expense_settings_history WHERE created_at<DATE_ADD(?,INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1`, [period.to]),
+    db.query(`SELECT DATE_FORMAT(shift_date,'%Y-%m-%d') production_date,
+      COALESCE(SUM(CASE WHEN LOWER(shift_name)='day' THEN dipping_qty ELSE 0 END),0) day_qty,
+      COALESCE(SUM(CASE WHEN LOWER(shift_name)='night' THEN dipping_qty ELSE 0 END),0) night_qty,
+      COALESCE(SUM(dipping_qty),0) total_qty,
+      ROUND(COALESCE(SUM(CASE WHEN LOWER(shift_name)='day' THEN COALESCE(ms_weight,0)*COALESCE(dipping_qty,0) ELSE 0 END),0),3) day_ms_kg,
+      ROUND(COALESCE(SUM(CASE WHEN LOWER(shift_name)='night' THEN COALESCE(ms_weight,0)*COALESCE(dipping_qty,0) ELSE 0 END),0),3) night_ms_kg,
+      ROUND(COALESCE(SUM(COALESCE(ms_weight,0)*COALESCE(dipping_qty,0)),0),3) total_ms_kg
+      FROM production_entries WHERE shift_date BETWEEN ? AND ? AND COALESCE(row_type,'entry')='entry'
+      GROUP BY shift_date ORDER BY shift_date`, params),
   ]);
   const production = numeric(productionResult[0])[0];
   const byproducts = numeric(byproductsResult[0])[0];
@@ -54,10 +64,11 @@ const buildMonthlyReport = async ({ month, financialYearId }) => {
   const zinc = summarizeZincMovements(movements, openingResult[0][0]);
   const expenseSettings = historicalSettingsResult[0][0] || settingsResult[0][0];
   const expenses = calculateExpenseReport({ settings: normalizeExpenseSettings(expenseSettings), production: { total_ms_kg: production.total_ms_kg, total_gi_kg: production.total_gi_kg, production_days: production.production_days }, stock: { plant_kg: zinc.closing_plant_kg }, purchasedZincKg: zinc.received_kg, recoveredZincKg: byproducts.recovered_zinc_kg });
-  return { financial_year: { id: year.id, name: year.financial_year }, period, production: { ...production, gross_zinc_kg: Math.max(0, production.total_gi_kg-production.total_ms_kg), net_zinc_kg: expenses.totals.net_zinc_consumed_kg, zinc_consumption_percent: expenses.totals.average_zinc_consumption_percent }, shifts: numeric(shiftsResult[0]), materials: numeric(materialsResult[0]), contractors: numeric(contractorsResult[0]), planning: numeric(planningResult[0]), zinc, zinc_movements: movements, byproducts, expenses };
+  return { financial_year: { id: year.id, name: year.financial_year }, period, production: { ...production, gross_zinc_kg: Math.max(0, production.total_gi_kg-production.total_ms_kg), net_zinc_kg: expenses.totals.net_zinc_consumed_kg, zinc_consumption_percent: expenses.totals.average_zinc_consumption_percent }, daily_production: numeric(dailyResult[0]), shifts: numeric(shiftsResult[0]), materials: numeric(materialsResult[0]), contractors: numeric(contractorsResult[0]), planning: numeric(planningResult[0]), zinc, zinc_movements: movements, byproducts, expenses };
 };
 
 const sendError = (res,error) => res.status(error.status||500).json({success:false,message:error.status?error.message:'Could not generate the monthly report.'});
 const getMonthlyReport = async (req,res) => { try{return res.json({success:true,data:await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id})});}catch(error){console.error(error);return sendError(res,error);} };
 const downloadMonthlyReportPdf = async (req,res) => { try{const report=await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id});const pdf=await generateMonthlyReportPdf(report);res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',pdf.length);res.setHeader('Content-Disposition',`inline; filename="monthly-report-${report.period.from.slice(0,7)}.pdf"`);return res.end(pdf);}catch(error){return sendError(res,error);} };
-module.exports={buildMonthlyReport,getMonthlyReport,downloadMonthlyReportPdf};
+const downloadDailyProductionPdf = async (req,res) => { try{const report=await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id});const pdf=await generateDailyProductionPdf(report);res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',pdf.length);res.setHeader('Content-Disposition',`inline; filename="daily-production-${report.period.from.slice(0,7)}.pdf"`);return res.end(pdf);}catch(error){console.error(error);return sendError(res,error);} };
+module.exports={buildMonthlyReport,getMonthlyReport,downloadMonthlyReportPdf,downloadDailyProductionPdf};

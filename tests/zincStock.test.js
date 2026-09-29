@@ -118,6 +118,8 @@ function controllerFixture({ failLedger = false } = {}) {
         ? { getConnection: async () => conn, query }
         : name === '../services/permissionService'
           ? { hasPermission: async () => true }
+          : name === '../services/stockAlertService'
+            ? { checkStockAlerts: async () => {}, ZINC_LIMIT_KG: 6000 }
           : service,
   });
   const run = async data => {

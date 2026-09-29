@@ -9,6 +9,19 @@ const { deriveNightShiftStart } = require("../services/automaticShiftService");
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const normalizeSetting = (key, input = {}) => {
+  if (key === "labour_timer_limits") {
+    const value = {};
+    for (const process of ["pickling", "flux", "hot_drier", "zinc_kettle"]) {
+      const minutes = Number(input[process]);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 120) {
+        const error = new Error("Each timer limit must be a whole number of minutes from 1 to 120");
+        error.status = 400;
+        throw error;
+      }
+      value[process] = minutes;
+    }
+    return value;
+  }
   if (key === "zinc_alert_threshold") {
     const percentage = Number(input.percentage);
     if (!Number.isFinite(percentage) || percentage <= 0 || percentage > 100) {

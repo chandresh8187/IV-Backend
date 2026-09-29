@@ -3,31 +3,57 @@ const { calculateProductionZincKg, applyProductionZinc } = require('../services/
 const { recalculatePlanningProgress } = require('../services/productionPlanningFlowService');
 const { refreshProductionCost } = require('../services/productionCostService');
 const { DateTime } = require('luxon');
+const { hasPermission } = require('../services/permissionService');
+const { getSetting } = require('../services/appSettingsService');
+const { DEFAULT_LIMIT_SECONDS, effectiveStartMs, finishTimer, expireDueTimers } = require('../services/labourTimerService');
 
 const fail = (res, error) => res.status(error.status || 500).json({ success: false, message: error.status ? error.message : 'Could not complete the labour weight request.' });
 const bad = message => Object.assign(new Error(message), { status: 400 });
+const timerColumns = {
+  pickling: ['pickling_started_at', 'pickling_duration_seconds', 'pickling_client_started_at_ms'],
+  flux: ['flux_started_at', 'flux_duration_seconds', 'flux_client_started_at_ms'],
+  hot_drier: ['hot_drier_started_at', 'hot_drier_duration_seconds', 'hot_drier_client_started_at_ms'],
+  zinc_kettle: ['zinc_kettle_started_at', 'zinc_kettle_duration_seconds', 'zinc_kettle_client_started_at_ms'],
+};
 
-const fetchEntries = async pendingOnly => {
-  const [rows] = await db.query(`SELECT e.id, e.ms_weight, e.dipping_qty, e.consumed_qty,
+const fetchEntries = async (pendingOnly, todayOnly = false) => {
+  const today = DateTime.now().setZone('Asia/Kolkata').toISODate();
+  const conditions = [
+    ...(pendingOnly ? ["e.status='pending'"] : []),
+    ...(todayOnly ? ['e.created_at >= ? AND e.created_at < ?'] : []),
+  ];
+  const params = todayOnly ? [today, DateTime.fromISO(today).plus({ days: 1 }).toISODate()] : [];
+  const [rows] = await db.query(`SELECT e.id, e.labour_user_id, e.ms_weight, e.dipping_qty, e.consumed_qty,
+    e.pickling_started_at, e.pickling_duration_seconds, e.pickling_client_started_at_ms,
+    e.flux_started_at, e.flux_duration_seconds, e.flux_client_started_at_ms,
+    e.hot_drier_started_at, e.hot_drier_duration_seconds, e.hot_drier_client_started_at_ms,
+    e.zinc_kettle_started_at, e.zinc_kettle_duration_seconds, e.zinc_kettle_client_started_at_ms,
+    e.pickling_limit_seconds, e.flux_limit_seconds, e.hot_drier_limit_seconds, e.zinc_kettle_limit_seconds,
     GREATEST(e.dipping_qty - e.consumed_qty, 0) AS remaining_qty, e.status, e.production_entry_id,
     p.item_id AS locked_item_id, p.material AS locked_material,
     DATE_FORMAT(e.created_at, '%Y-%m-%d %H:%i:%s') created_at, u.name labour_name
     FROM labour_weight_entries e JOIN users u ON u.id=e.labour_user_id
     LEFT JOIN production_entries p ON p.id=e.production_entry_id
-    ${pendingOnly ? "WHERE e.status='pending'" : ''} ORDER BY e.id ASC`);
+    ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY e.id ASC`, params);
   return rows;
 };
 
 const list = async (req, res) => {
   try {
+    await expireDueTimers(req.app.get('io'));
     const pendingOnly = req.query.pending === '1';
-    const rows = await fetchEntries(pendingOnly);
-    return res.json({ success: true, data: rows });
+    const rows = await fetchEntries(pendingOnly, true);
+    const permitted = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'labour_weights.timer' });
+    return res.json({ success: true, data: rows.map(row => ({
+      ...row,
+      can_run_timer: permitted && (req.user.role !== 'labour' || Number(row.labour_user_id) === Number(req.user.id)),
+    })) });
   } catch (error) { return fail(res, error); }
 };
 
 const listPending = async (req, res) => {
   try {
+    await expireDueTimers(req.app.get('io'));
     const rows = await fetchEntries(true);
     return res.json({ success: true, data: rows });
   } catch (error) { return fail(res, error); }
@@ -142,6 +168,71 @@ const update = async (req, res) => {
   finally { connection?.release(); }
 };
 
+const toggleTimer = async (req, res) => {
+  const columns = timerColumns[req.params.process];
+  const id = Number(req.params.id);
+  const requestedAction = req.body?.action;
+  if (!columns || !Number.isSafeInteger(id) || id < 1 || !['start', 'stop'].includes(requestedAction)) return res.status(400).json({ success: false, message: 'Select a valid weight, timer and action.' });
+  const [startedColumn, durationColumn, clientStartedColumn] = columns;
+  const limitColumn = `${req.params.process}_limit_seconds`;
+  const clientEventAtMs = Number(req.body?.client_event_at_ms);
+  const validClientEvent = Number.isSafeInteger(clientEventAtMs) && clientEventAtMs > 0;
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.query('SELECT * FROM labour_weight_entries WHERE id = ? FOR UPDATE', [id]);
+    const entry = rows[0];
+    if (!entry) throw Object.assign(new Error('Labour weight entry not found.'), { status: 404 });
+    if (req.user.role === 'labour' && Number(entry.labour_user_id) !== Number(req.user.id)) {
+      throw Object.assign(new Error('Only the labour user who entered this weight can run its timer.'), { status: 403 });
+    }
+    if (entry[durationColumn] != null) throw Object.assign(new Error('This timer has already been stopped and saved.'), { status: 409 });
+    if (entry[startedColumn] && Date.now() - effectiveStartMs(entry, req.params.process) >= (Number(entry[limitColumn]) || DEFAULT_LIMIT_SECONDS[req.params.process]) * 1000) {
+      const limitSeconds = Number(entry[limitColumn]) || DEFAULT_LIMIT_SECONDS[req.params.process];
+      await finishTimer(connection, entry, req.params.process, limitSeconds);
+      await connection.commit();
+      req.app.get('io')?.emit('labour_weights_updated', { action: 'timer_auto_stopped', id });
+      req.app.get('io')?.emit('production_updated', { action: 'labour_timer_auto_stopped' });
+      return res.json({ success: true, action: 'stopped', data: { id, process: req.params.process, duration_seconds: limitSeconds, duration_source: 'limit' } });
+    }
+    if (requestedAction === 'start' && entry[startedColumn]) throw Object.assign(new Error('This timer is already running. Refresh the weight list.'), { status: 409 });
+    if (requestedAction === 'stop' && !entry[startedColumn]) throw Object.assign(new Error('This timer has not started. Refresh the weight list.'), { status: 409 });
+    let action;
+    let seconds = null;
+    let durationSource = null;
+    if (!entry[startedColumn]) {
+      const limits = await getSetting('labour_timer_limits', connection);
+      const limitSeconds = Number(limits[req.params.process]) * 60;
+      await connection.query(`UPDATE labour_weight_entries SET ${startedColumn} = CURRENT_TIMESTAMP(3), ${clientStartedColumn} = ?, ${limitColumn} = ? WHERE id = ?`, [validClientEvent ? clientEventAtMs : null, limitSeconds, id]);
+      action = 'started';
+    } else {
+      const [durationRows] = await connection.query(
+        `SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, ${startedColumn}, CURRENT_TIMESTAMP(3))) AS seconds FROM labour_weight_entries WHERE id = ?`,
+        [id],
+      );
+      const serverSeconds = Number(durationRows[0]?.seconds) || 0;
+      const clientStartedAtMs = Number(entry[clientStartedColumn]);
+      const clientSeconds = validClientEvent && Number.isSafeInteger(clientStartedAtMs) && clientStartedAtMs > 0
+        ? Math.floor((clientEventAtMs - clientStartedAtMs) / 1000)
+        : null;
+      const useClientDuration = Number.isSafeInteger(clientSeconds) && clientSeconds >= 0 && Math.abs(clientSeconds - serverSeconds) <= 10;
+      seconds = Math.min(useClientDuration ? clientSeconds : serverSeconds, Number(entry[limitColumn]) || DEFAULT_LIMIT_SECONDS[req.params.process]);
+      durationSource = useClientDuration ? 'client' : 'server';
+      await finishTimer(connection, entry, req.params.process, seconds);
+      action = 'stopped';
+    }
+    await connection.commit();
+    const io = req.app.get('io');
+    io?.emit('labour_weights_updated', { action, id, process: req.params.process });
+    if (action === 'stopped') io?.emit('production_updated', { action: 'labour_timer_stopped', production_id: entry.production_entry_id });
+    return res.json({ success: true, action, data: { id, process: req.params.process, duration_seconds: seconds, duration_source: durationSource } });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    return fail(res, error);
+  } finally { connection?.release(); }
+};
+
 const consume = async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -152,4 +243,4 @@ const consume = async (req, res) => {
   } catch (error) { return fail(res, error); }
 };
 
-module.exports = { list, listPending, create, update, consume };
+module.exports = { list, listPending, create, update, consume, toggleTimer };

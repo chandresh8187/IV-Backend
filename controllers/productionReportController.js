@@ -53,7 +53,7 @@ const getSummary = async (where, params) => {
   };
 };
 
-const getReportFilter = ({ type, value, date, planningId, itemId, shiftName }) => {
+const getReportFilter = ({ type, value, date, planningId, planningItemId, itemId, shiftName }) => {
   if (type === "material") {
     const materialWhere = itemId
       ? "pe.shift_date = ? AND pe.item_id = ?"
@@ -77,8 +77,10 @@ const getReportFilter = ({ type, value, date, planningId, itemId, shiftName }) =
   }
 
   return {
-    where: planningId ? "pe.planning_id = ?" : "pe.challan_no = ?",
-    params: [planningId || value],
+    where: planningItemId
+      ? "(pe.planning_item_id = ? OR (pe.planning_item_id IS NULL AND pe.planning_id = ? AND (pe.challan_no = ? OR (SELECT COUNT(*) FROM production_planning_items WHERE planning_id = ?) = 1)))"
+      : planningId ? "pe.planning_id = ?" : "pe.challan_no = ?",
+    params: planningItemId ? [planningItemId, planningId, value, planningId] : [planningId || value],
     reportDate: null,
     shiftName: `Challan ${value}`,
   };
@@ -90,6 +92,7 @@ const generateProductionReport = async (req, res) => {
     const value = String(req.query.value || "").trim();
     const date = String(req.query.date || "").trim();
     const planningId = Number(req.query.planning_id) || null;
+    const planningItemId = Number(req.query.planning_item_id) || null;
     const itemId = Number(req.query.item_id) || null;
     const shiftName = String(req.query.shift_name || "").trim().toLowerCase();
 
@@ -129,7 +132,7 @@ const generateProductionReport = async (req, res) => {
       });
     }
 
-    const filter = getReportFilter({ type, value, date, planningId, itemId, shiftName });
+    const filter = getReportFilter({ type, value, date, planningId, planningItemId, itemId, shiftName });
     const [tableData] = await db.query(
       `
       SELECT
@@ -139,6 +142,10 @@ const generateProductionReport = async (req, res) => {
         pe.shift_name,
         pe.sr_no,
         pe.production_time,
+        pe.pickling_duration_seconds,
+        pe.flux_duration_seconds,
+        pe.hot_drier_duration_seconds,
+        pe.zinc_kettle_duration_seconds,
         pe.challan_no,
         pe.party_name,
         pe.material,
@@ -200,4 +207,22 @@ const generateProductionReport = async (req, res) => {
   }
 };
 
-module.exports = { generateProductionReport };
+const generateCompletedPlanningItemReport = async (req, res) => {
+  try {
+    const itemId = Number(req.params.itemId);
+    if (!Number.isSafeInteger(itemId) || itemId < 1) return res.status(400).json({ success: false, message: 'Select a valid planning item.' });
+    const [items] = await db.query(`SELECT ppi.id, ppi.planning_id, ppi.status,
+      COALESCE(ppi.challan_no, pp.challan_no) AS challan_no
+      FROM production_planning_items ppi JOIN production_planning pp ON pp.id = ppi.planning_id
+      WHERE ppi.id = ? AND pp.deleted_at IS NULL LIMIT 1`, [itemId]);
+    const item = items[0];
+    if (!item) return res.status(404).json({ success: false, message: 'Planning challan not found.' });
+    if (item.status !== 'completed') return res.status(409).json({ success: false, message: 'The production report is available when this challan is completed.' });
+    return generateProductionReport({ query: { type: 'challan', value: item.challan_no, planning_id: item.planning_id, planning_item_id: item.id } }, res);
+  } catch (error) {
+    console.error('generateCompletedPlanningItemReport:', error);
+    return res.status(500).json({ success: false, message: 'Could not generate the completed challan report.' });
+  }
+};
+
+module.exports = { generateProductionReport, generateCompletedPlanningItemReport, getReportFilter };

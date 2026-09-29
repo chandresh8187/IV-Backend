@@ -16,6 +16,12 @@ const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
     message: "",
   }),
+  labour_timer_limits: Object.freeze({
+    pickling: 7,
+    flux: 2,
+    hot_drier: 5,
+    zinc_kettle: 5,
+  }),
 });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
