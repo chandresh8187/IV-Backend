@@ -19,6 +19,7 @@ router.post('/change', access([], 'gas.operate'), async (req, res, next) => {
 router.post('/assign', access([], 'gas.manage'), c.assignBottle);
 router.post('/positions/:position/fill', access([], 'gas.manage'), c.fillPosition);
 router.put('/positions/:position/weight', access([], 'gas.manage'), c.updateFilledWeight);
+router.put('/positions/:position/start-time', access([], 'gas.manage'), c.updateStartTime);
 router.post('/start', access([], 'gas.manage'), c.startBottle);
 router.post('/switch', access([], 'gas.operate'), (req, res) => { req.body = { ...req.body, bottle_number: req.body.next_position_no, changed_at: req.body.finished_at }; return c.changeBottle(req, res); });
 router.get('/pdf', access([], 'gas.report'), c.downloadPdf);

@@ -38,6 +38,11 @@ function getMigrationChecksums(sql) {
   };
 }
 
+function isAcceptedMigrationChecksum(filename, file, checksum) {
+  return file.acceptedChecksums.has(checksum)
+    || Boolean(LEGACY_MIGRATION_CHECKSUMS.get(filename)?.has(checksum));
+}
+
 function getDatabaseConfig() {
   const required = ["DB_HOST", "DB_USER", "DB_NAME"];
   const missing = required.filter((key) => !String(process.env[key] || "").trim());
@@ -94,8 +99,7 @@ function verifyMigrationHistory(files, applied) {
     if (!file) {
       throw new Error(`Applied migration file is missing: ${filename}`);
     }
-    const acceptedLegacyChecksums = LEGACY_MIGRATION_CHECKSUMS.get(filename);
-    if (!file.acceptedChecksums.has(record.checksum) && !acceptedLegacyChecksums?.has(record.checksum)) {
+    if (!isAcceptedMigrationChecksum(filename, file, record.checksum)) {
       throw new Error(`Applied migration was modified: ${filename}`);
     }
   }
@@ -143,7 +147,7 @@ async function run(options = {}) {
     await ensureMigrationTable(connection);
 
     const files = loadMigrationFiles();
-    const applied = await getAppliedMigrations(connection);
+    let applied = await getAppliedMigrations(connection);
     verifyMigrationHistory(files, applied);
 
     if (command === "status") {
@@ -151,20 +155,35 @@ async function run(options = {}) {
       return;
     }
 
-    const pending = files.filter((file) => !applied.has(file.filename));
-    const validated = pending.map((file) => ({
+    let pending = files.filter((file) => !applied.has(file.filename));
+    let validated = pending.map((file) => ({
+      ...file,
+      statement: validateMigrationSql(file.sql),
+    }));
+
+    if (dryRun) {
+      if (!validated.length) {
+        console.log("Database is up to date. No pending migrations.");
+        return;
+      }
+      console.log(`Validated ${validated.length} pending migration(s):`);
+      validated.forEach((file) => console.log(`PENDING  ${file.filename}`));
+      return;
+    }
+
+    // Older clean imports may list labour migrations as applied while their
+    // columns are absent. Reconcile the actual schema under the same lock.
+    await require('./repairLabourWeightSchema').repair(connection);
+    applied = await getAppliedMigrations(connection);
+    verifyMigrationHistory(files, applied);
+    pending = files.filter((file) => !applied.has(file.filename));
+    validated = pending.map((file) => ({
       ...file,
       statement: validateMigrationSql(file.sql),
     }));
 
     if (!validated.length) {
       console.log("Database is up to date. No pending migrations.");
-      return;
-    }
-
-    if (dryRun) {
-      console.log(`Validated ${validated.length} pending migration(s):`);
-      validated.forEach((file) => console.log(`PENDING  ${file.filename}`));
       return;
     }
 
@@ -201,4 +220,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { getMigrationChecksums, run };
+module.exports = { getDatabaseConfig, getMigrationChecksums, isAcceptedMigrationChecksum, run };

@@ -18,7 +18,7 @@ function load(relative, dependencies) {
   return module.exports;
 }
 
-function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false, contractorExists = true, existingContractor = null } = {}) {
+function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false, contractorExists = true, existingContractor = null, weightMode = 'manual' } = {}) {
   let state = { id: 1, correction_shift_id: correction ? 10 : null, revision: correction ? 1 : 2 };
   const current = { id: 20, shift_date: '2026-09-12', shift_name: 'day', status: 'active' };
   const previous = { id: 10, shift_date: '2026-09-11', shift_name: 'night', status: 'closed' };
@@ -50,6 +50,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
     }
     if (sql.includes('production_edit_grants')) return [[]];
     if (sql.includes('FROM labour_weight_consumptions')) return [[]];
+    if (sql.includes("FROM app_settings WHERE setting_key = 'labour_weight_mode'")) return [[{ setting_value: JSON.stringify({ mode: weightMode }) }]];
     if (sql.includes('AS used_qty')) return [[{ used_qty: usedQty }]];
     if (sql.includes('AS next_sr_no')) return [[{ next_sr_no: 4 }]];
     if (sql.includes('FROM production_planning')) return [[plan]];
@@ -279,4 +280,13 @@ test('only superadmin and plant manager can manage correction, even with custom 
     await middleware({ user: { id: 1, role } }, res, () => { permitted = true; });
     assert.equal(permitted, ['superadmin', 'plant_manager'].includes(role));
   }
+});
+
+test('selection weight mode rejects a new production entry without a chosen dip', async () => {
+  const f = fixture({ correction: false, weightMode: 'selection' });
+  const res = f.response();
+  await f.production.saveProductionEntry(f.request(), res);
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /Select the labour weight/);
+  assert.equal(f.stats().commits, 0);
 });

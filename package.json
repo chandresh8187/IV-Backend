@@ -10,6 +10,7 @@
     "migrate": "node scripts/migrate.js up",
     "migrate:status": "node scripts/migrate.js status",
     "migrate:dry-run": "node scripts/migrate.js up --dry-run",
+    "schema:check": "node scripts/checkSchema.js",
     "migration:create": "node scripts/createMigration.js"
   },
   "keywords": [],

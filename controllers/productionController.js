@@ -450,6 +450,24 @@ const saveProductionEntry = async (req, res) => {
           });
           action = "updated";
         } else {
+          const [modeRows] = await connection.query("SELECT setting_value FROM app_settings WHERE setting_key = 'labour_weight_mode' LIMIT 1");
+          let configuredWeightMode = 'manual';
+          try {
+            const rawMode = modeRows?.[0]?.setting_value;
+            const savedMode = typeof rawMode === 'string' ? JSON.parse(rawMode) : rawMode;
+            if (['manual', 'auto', 'selection'].includes(savedMode?.mode)) configuredWeightMode = savedMode.mode;
+          } catch { /* An invalid setting falls back to manual input. */ }
+          if (configuredWeightMode !== 'manual' && labour_weight_id == null) {
+            throw Object.assign(new Error(configuredWeightMode === 'selection'
+              ? 'Select the labour weight for the dip currently on the kettle.'
+              : 'No pending labour weight is available. Add a labour weight first.'), { status: 400 });
+          }
+          if (configuredWeightMode === 'auto' && labour_weight_id != null) {
+            const [firstPending] = await connection.query("SELECT id FROM labour_weight_entries WHERE status = 'pending' ORDER BY id LIMIT 1 FOR UPDATE");
+            if (Number(firstPending?.[0]?.id) !== Number(labour_weight_id)) {
+              throw Object.assign(new Error('The next automatic labour weight has changed. Refresh and reopen the production form.'), { status: 409 });
+            }
+          }
           if (labour_weight_id != null) {
             const labourEntryId = Number(labour_weight_id);
             if (!Number.isInteger(labourEntryId) || labourEntryId < 1) {

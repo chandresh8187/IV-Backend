@@ -29,6 +29,8 @@ const requiredTables = [
   "production_planning_items", "labour_weight_entries", "chat_participants",
   "chat_participant_devices", "chat_participant_reads", "zinc_stock",
   "expense_settings", "chemical_checks", "schema_migrations",
+  "gas_bottle_receipts", "gas_bottles", "gas_bottle_runs",
+  "labour_weight_consumptions", "stock_alert_state",
 ];
 const missing = requiredTables.filter(name => !tableNames.includes(name));
 if (missing.length) throw new Error(`Clean-install schema is missing tables: ${missing.join(", ")}`);

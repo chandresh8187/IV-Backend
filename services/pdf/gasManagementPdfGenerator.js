@@ -31,10 +31,11 @@ async function generateGasManagementPdf({ summary = {}, receipts = [], runs = []
     header();
   }
   const events = [];
+  const periodCounts = runs.reduce((counts,run)=>{counts[run.bottle_id]=(counts[run.bottle_id]||0)+1;return counts;},{});
   receipts.forEach(r=>events.push({time:r.received_at,description:`Stock received: ${r.bottle_count} bottles (${num(r.bottle_count*425)} kg) added to plant. Rate: Rs ${(Number(r.price_per_bottle)/Number(r.kg_per_bottle || 425)).toFixed(2)} / kg`,amount:r.total_amount ?? r.bottle_count*r.price_per_bottle,actor:r.actor_name}));
   runs.forEach(r=>{
     events.push({time:r.started_at,description:`Bottle ${r.position_no} started supplying gas`,actor:r.started_by_name});
-    if(r.finished_at) { const next=String(r.note || '').match(/bottle (\d+) started/i)?.[1]; const minutes=Math.max(0,Math.floor(parse(r.finished_at).diff(parse(r.started_at),'minutes').minutes)); events.push({time:r.finished_at,description:`GAS-${r.position_no} finished${next ? `; GAS-${next} started` : ''}. Filled ${num(r.filled_weight_kg)} kg, empty ${num(r.empty_weight_kg)} kg, gas used ${num(r.consumed_gas_kg)} kg. Started: ${stamp(r.started_at)}`,duration:`${Math.floor(minutes/60)}h ${minutes%60}m`,production:Number(r.production_ton || 0)*1000,amount:r.consumed_cost,actor:r.finished_by_name}); }
+    if(r.finished_at) { const next=String(r.note || '').match(/bottle (\d+) started/i)?.[1]; const minutes=Math.max(0,Math.floor(parse(r.finished_at).diff(parse(r.started_at),'minutes').minutes)); const measured=r.consumed_gas_kg!=null; const estimate=(periodCounts[r.bottle_id]||0)>1?'estimated ':''; const usage=measured ? `${r.empty_weight_kg!=null ? `empty ${num(r.empty_weight_kg)} kg, ` : ''}${estimate}gas used ${num(r.consumed_gas_kg)} kg` : r.end_reason==='paused' ? 'gas use pending until this bottle is finally emptied' : 'empty weight and gas used pending'; events.push({time:r.finished_at,description:`GAS-${r.position_no} ${r.end_reason==='paused'?'paused':'finished'}${next ? `; GAS-${next} started` : ''}. Filled ${num(r.filled_weight_kg)} kg, ${usage}. Started: ${stamp(r.started_at)}`,duration:`${Math.floor(minutes/60)}h ${minutes%60}m`,production:Number(r.production_ton || 0)*1000,amount:r.consumed_cost,actor:r.finished_by_name}); }
   });
   events.sort((a,b)=>parse(b.time).toMillis()-parse(a.time).toMillis());
   addPage(true);

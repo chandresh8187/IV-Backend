@@ -4,7 +4,7 @@ const fakeDb = {};
 require.cache[require.resolve('../config/db')] = { exports: fakeDb };
 const { changeBottle } = require('../controllers/gasManagementController');
 
-test('gas change uses filled minus empty weight and starts the selected ready slot', async () => {
+test('gas change finishes the old run without empty weight and starts the selected ready slot', async () => {
   const calls = []; let committed = false;
   fakeDb.getConnection = async () => ({
     beginTransaction: async () => {}, release() {}, rollback: async () => {}, commit: async () => { committed = true; },
@@ -17,20 +17,15 @@ test('gas change uses filled minus empty weight and starts the selected ready sl
     },
   });
   const res = { status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
-  await changeBottle({ body: { bottle_number: 4, empty_weight_kg: 125, changed_at: '2026-09-27 12:00:00' }, user: { id: 5 }, app: { get: () => null } }, res);
+  await changeBottle({ body: { bottle_number: 4, changed_at: '2026-09-27 12:00:00' }, user: { id: 5 }, app: { get: () => null } }, res);
   assert.equal(res.body.success, true); assert.equal(committed, true);
   assert.deepEqual(calls.find(c => c.sql.includes("SET status='running'")).values, [1]);
   const runUpdate = calls.find(c => c.sql.startsWith('UPDATE gas_bottle_runs'));
-  assert.equal(runUpdate.values[3], 400);
-  assert.equal(runUpdate.values[6], 42000);
+  assert.equal(runUpdate.values[2], 12);
+  assert.equal(runUpdate.sql.includes('empty_weight_kg'), false);
   // Repeating the running number must not consume another bottle or commit.
   committed = false; calls.length = 0;
-  await changeBottle({ body: { bottle_number: 2, empty_weight_kg: 125, changed_at: '2026-09-27 12:00:00' }, user: { id: 5 }, app: { get: () => null } }, res);
+  await changeBottle({ body: { bottle_number: 2, changed_at: '2026-09-27 12:00:00' }, user: { id: 5 }, app: { get: () => null } }, res);
   assert.equal(res.code, 409); assert.equal(committed, false);
   assert.equal(calls.some(c => c.sql.startsWith('UPDATE')), false);
-  committed = false; calls.length = 0;
-  await changeBottle({ body: { bottle_number: 4, changed_at: '2026-09-27 12:00:00' }, user: { id: 5 }, app: { get: () => null } }, res);
-  assert.equal(res.code, 400);
-  assert.equal(committed, false);
-  assert.equal(calls.length, 0);
 });

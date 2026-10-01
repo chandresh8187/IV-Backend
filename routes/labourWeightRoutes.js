@@ -2,6 +2,8 @@ const router = require('express').Router();
 const auth = require('../middleware/authMiddleware');
 const access = require('../middleware/roleMiddleware');
 const controller = require('../controllers/labourWeightController');
+router.get('/mode', auth, controller.getMode);
+router.put('/mode', auth, controller.setMode);
 router.get('/', auth, access([], 'labour_weights.view'), controller.list);
 router.get('/pending', auth, access([], 'production.save'), controller.listPending);
 router.post('/', auth, access([], 'labour_weights.create'), controller.create);

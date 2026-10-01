@@ -7,7 +7,7 @@ const PERMISSIONS = [
   { key: 'gas.manage', group: 'Gas Management', label: 'Manage gas bottle stock', description: 'Receive bottles, record filled weights and start gas supply.', defaultRoles: ['superadmin', 'plant_manager'] },
   { key: 'gas.operate', group: 'Gas Management', label: 'Start and switch gas bottles', description: 'Record bottle start, finish, remaining gas, and the next running position.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
   { key: 'gas.report', group: 'Gas Management', label: 'Generate gas PDF report', description: 'Generate bottle purchase, consumption, production, and cost reports.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
-  { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: ['superadmin', 'supervisor', 'labour'] },
+  { key: 'labour_weights.view', group: 'Labour Weights', label: 'View labour weight list', description: 'View queued MS weight and dip quantity entries.', defaultRoles: [...ALL_ROLES, 'labour'] },
   { key: 'labour_weights.create', group: 'Labour Weights', label: 'Add labour weights', description: 'Add MS weight and dip quantity to the production queue.', defaultRoles: ['labour'] },
   { key: 'labour_weights.timer', group: 'Labour Weights', label: 'Run labour process timers', description: 'Start and stop pickling, flux and hot drier timers for a labour weight.', defaultRoles: ['labour', 'supervisor', 'superadmin'] },
   { key: 'labour_weights.edit', group: 'Labour Weights', label: 'Edit labour weights', description: 'Correct labour weights and linked production entries.', defaultRoles: ['superadmin', 'supervisor'] },

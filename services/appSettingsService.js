@@ -1,6 +1,7 @@
 const db = require("../config/db");
 
 const DEFAULT_SETTINGS = Object.freeze({
+  labour_weight_mode: Object.freeze({ mode: 'manual' }),
   zinc_alert_threshold: Object.freeze({
     enabled: true,
     percentage: 7.5,

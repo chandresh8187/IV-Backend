@@ -4,11 +4,31 @@ const { recalculatePlanningProgress } = require('../services/productionPlanningF
 const { refreshProductionCost } = require('../services/productionCostService');
 const { DateTime } = require('luxon');
 const { hasPermission } = require('../services/permissionService');
-const { getSetting } = require('../services/appSettingsService');
+const { getSetting, clearSettingCache } = require('../services/appSettingsService');
 const { DEFAULT_LIMIT_SECONDS, effectiveStartMs, finishTimer, expireDueTimers } = require('../services/labourTimerService');
 
-const fail = (res, error) => res.status(error.status || 500).json({ success: false, message: error.status ? error.message : 'Could not complete the labour weight request.' });
+const fail = (res, error) => {
+  if (!error.status) console.error('Labour weight request failed:', error);
+  return res.status(error.status || 500).json({ success: false, message: error.status ? error.message : 'Could not complete the labour weight request.' });
+};
 const bad = message => Object.assign(new Error(message), { status: 400 });
+const WEIGHT_MODES = new Set(['manual', 'auto', 'selection']);
+const getMode = async (req, res) => {
+  try { return res.json({ success: true, data: await getSetting('labour_weight_mode') }); }
+  catch (error) { return fail(res, error); }
+};
+const setMode = async (req, res) => {
+  if (String(req.user?.role || '').toLowerCase() === 'labour') return res.status(403).json({ success: false, message: 'Labour users cannot change the weight mode.' });
+  const mode = String(req.body?.mode || '').trim().toLowerCase();
+  if (!WEIGHT_MODES.has(mode)) return res.status(400).json({ success: false, message: 'Choose manual, auto or selection weight.' });
+  try {
+    await db.query(`INSERT INTO app_settings (setting_key, setting_value, updated_by) VALUES ('labour_weight_mode', ?, ?)
+      ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by=VALUES(updated_by), updated_at=CURRENT_TIMESTAMP`, [JSON.stringify({ mode }), req.user.id]);
+    clearSettingCache('labour_weight_mode');
+    req.app.get('io')?.emit('labour_weight_mode_changed', { mode });
+    return res.json({ success: true, data: { mode } });
+  } catch (error) { return fail(res, error); }
+};
 const timerColumns = {
   pickling: ['pickling_started_at', 'pickling_duration_seconds', 'pickling_client_started_at_ms'],
   flux: ['flux_started_at', 'flux_duration_seconds', 'flux_client_started_at_ms'],
@@ -31,7 +51,10 @@ const fetchEntries = async (pendingOnly, todayOnly = false) => {
     e.pickling_limit_seconds, e.flux_limit_seconds, e.hot_drier_limit_seconds, e.zinc_kettle_limit_seconds,
     GREATEST(e.dipping_qty - e.consumed_qty, 0) AS remaining_qty, e.status, e.production_entry_id,
     p.item_id AS locked_item_id, p.material AS locked_material,
-    DATE_FORMAT(e.created_at, '%Y-%m-%d %H:%i:%s') created_at, u.name labour_name
+    DATE_FORMAT(e.created_at, '%Y-%m-%d %H:%i:%s') created_at,
+    (SELECT COUNT(*) FROM labour_weight_entries numbered
+      WHERE DATE(numbered.created_at) = DATE(e.created_at) AND numbered.id <= e.id) AS dip_number,
+    u.name labour_name
     FROM labour_weight_entries e JOIN users u ON u.id=e.labour_user_id
     LEFT JOIN production_entries p ON p.id=e.production_entry_id
     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY e.id ASC`, params);
@@ -243,4 +266,4 @@ const consume = async (req, res) => {
   } catch (error) { return fail(res, error); }
 };
 
-module.exports = { list, listPending, create, update, consume, toggleTimer };
+module.exports = { list, listPending, create, update, consume, toggleTimer, getMode, setMode };

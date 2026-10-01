@@ -1,6 +1,6 @@
 -- IV Square Structure production management database
 -- Clean-install schema for MariaDB 10.5+ / MySQL 8.0+
--- Generated from the backend queries and every versioned migration on 2026-09-26.
+-- Generated from the backend queries and every versioned migration through 2026-09-29.
 --
 -- IMPORTANT: Import this file into an EMPTY database named
 -- u436685010_iv_app. It contains only required system defaults and one
@@ -45,10 +45,32 @@ CREATE TABLE IF NOT EXISTS `labour_weight_entries` (
   `labour_user_id` INT NOT NULL,
   `ms_weight` DECIMAL(12,3) NOT NULL,
   `dipping_qty` INT UNSIGNED NOT NULL,
+  `consumed_qty` INT UNSIGNED NOT NULL DEFAULT 0,
   `status` ENUM('pending','used') NOT NULL DEFAULT 'pending',
+  `production_entry_id` BIGINT NULL,
+  `pickling_time` TIME NULL,
+  `flux_time` TIME NULL,
+  `hot_drier_time` TIME NULL,
+  `pickling_started_at` TIMESTAMP(3) NULL,
+  `pickling_duration_seconds` INT UNSIGNED NULL,
+  `pickling_client_started_at_ms` BIGINT UNSIGNED NULL,
+  `pickling_limit_seconds` INT NULL,
+  `flux_started_at` TIMESTAMP(3) NULL,
+  `flux_duration_seconds` INT UNSIGNED NULL,
+  `flux_client_started_at_ms` BIGINT UNSIGNED NULL,
+  `flux_limit_seconds` INT NULL,
+  `hot_drier_started_at` TIMESTAMP(3) NULL,
+  `hot_drier_duration_seconds` INT UNSIGNED NULL,
+  `hot_drier_client_started_at_ms` BIGINT UNSIGNED NULL,
+  `hot_drier_limit_seconds` INT NULL,
+  `zinc_kettle_started_at` TIMESTAMP(3) NULL,
+  `zinc_kettle_duration_seconds` INT NULL,
+  `zinc_kettle_client_started_at_ms` BIGINT UNSIGNED NULL,
+  `zinc_kettle_limit_seconds` INT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_labour_weight_production` (`production_entry_id`),
   KEY `idx_labour_weight_queue` (`status`,`id`),
   KEY `idx_labour_weight_user` (`labour_user_id`),
   CONSTRAINT `fk_labour_weight_user` FOREIGN KEY (`labour_user_id`) REFERENCES `users` (`id`)
@@ -99,7 +121,6 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
 CREATE TABLE IF NOT EXISTS `user_fcm_tokens` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `user_id` INT NOT NULL,
-  `sender_name` VARCHAR(80) NULL,
   `installation_id` VARCHAR(100) NULL,
   `fcm_token` VARCHAR(512) NOT NULL,
   `device_type` VARCHAR(30) NOT NULL DEFAULT 'android',
@@ -415,6 +436,13 @@ CREATE TABLE IF NOT EXISTS `production_entries` (
   `zinc_consumption` DECIMAL(10,2) NULL,
   `contractor_id` INT NULL,
   `zinc_stock_deducted_kg` DECIMAL(14,3) NOT NULL DEFAULT 0,
+  `pickling_time` TIME NULL,
+  `flux_time` TIME NULL,
+  `hot_drier_time` TIME NULL,
+  `pickling_duration_seconds` INT UNSIGNED NULL,
+  `flux_duration_seconds` INT UNSIGNED NULL,
+  `hot_drier_duration_seconds` INT UNSIGNED NULL,
+  `zinc_kettle_duration_seconds` INT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -644,6 +672,84 @@ CREATE TABLE IF NOT EXISTS `chemical_checks` (
   CONSTRAINT `chk_flux_temperature` CHECK (`flux_temperature_c` IS NULL OR `flux_temperature_c` BETWEEN -50 AND 200)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `labour_weight_consumptions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `labour_weight_id` BIGINT UNSIGNED NOT NULL,
+  `production_entry_id` BIGINT NOT NULL,
+  `dipping_qty` INT UNSIGNED NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_labour_consumption_production` (`production_entry_id`),
+  KEY `idx_labour_consumption_labour` (`labour_weight_id`),
+  CONSTRAINT `fk_labour_consumption_weight` FOREIGN KEY (`labour_weight_id`) REFERENCES `labour_weight_entries` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `gas_bottle_receipts` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `bottle_count` INT UNSIGNED NOT NULL,
+  `kg_per_bottle` DECIMAL(10,3) NOT NULL DEFAULT 425.000,
+  `price_per_bottle` DECIMAL(12,2) NOT NULL,
+  `supplier` VARCHAR(150) NULL,
+  `invoice_no` VARCHAR(100) NULL,
+  `received_at` DATETIME NOT NULL,
+  `note` VARCHAR(255) NULL,
+  `actor_user_id` INT NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_gas_receipts_date` (`received_at`),
+  CONSTRAINT `fk_gas_receipt_user` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `gas_bottles` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `receipt_id` BIGINT UNSIGNED NOT NULL,
+  `bottle_code` VARCHAR(50) NOT NULL,
+  `status` ENUM('filled','ready','running','finished','empty') NOT NULL DEFAULT 'filled',
+  `position_no` TINYINT UNSIGNED NULL,
+  `initial_gas_kg` DECIMAL(10,3) NOT NULL DEFAULT 425.000,
+  `remaining_gas_kg` DECIMAL(10,3) NOT NULL DEFAULT 425.000,
+  `filled_weight_kg` DECIMAL(10,3) NULL,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_gas_bottle_code` (`bottle_code`),
+  UNIQUE KEY `uq_gas_position` (`position_no`),
+  KEY `idx_gas_bottle_status` (`status`),
+  CONSTRAINT `fk_gas_bottle_receipt` FOREIGN KEY (`receipt_id`) REFERENCES `gas_bottle_receipts` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `gas_bottle_runs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `bottle_id` BIGINT UNSIGNED NOT NULL,
+  `position_no` TINYINT UNSIGNED NOT NULL,
+  `started_at` DATETIME NOT NULL,
+  `finished_at` DATETIME NULL,
+  `start_gas_kg` DECIMAL(10,3) NOT NULL,
+  `final_gas_kg` DECIMAL(10,3) NULL,
+  `consumed_gas_kg` DECIMAL(10,3) NULL,
+  `production_ton` DECIMAL(14,3) NULL,
+  `gas_kg_per_ton` DECIMAL(12,3) NULL,
+  `consumed_cost` DECIMAL(14,2) NULL,
+  `empty_weight_kg` DECIMAL(10,3) NULL,
+  `end_reason` ENUM('finished','paused') NOT NULL DEFAULT 'finished',
+  `started_by` INT NOT NULL,
+  `finished_by` INT NULL,
+  `note` VARCHAR(255) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_gas_runs_time` (`started_at`,`finished_at`),
+  KEY `idx_gas_runs_bottle` (`bottle_id`),
+  CONSTRAINT `fk_gas_run_bottle` FOREIGN KEY (`bottle_id`) REFERENCES `gas_bottles` (`id`),
+  CONSTRAINT `fk_gas_run_started_user` FOREIGN KEY (`started_by`) REFERENCES `users` (`id`),
+  CONSTRAINT `fk_gas_run_finished_user` FOREIGN KEY (`finished_by`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `stock_alert_state` (
+  `stock_type` VARCHAR(16) NOT NULL,
+  `is_low` TINYINT(1) NOT NULL DEFAULT 0,
+  `generation` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (`stock_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `schema_migrations` (
   `filename` VARCHAR(255) NOT NULL,
   `checksum` CHAR(64) NOT NULL,
@@ -663,7 +769,7 @@ INSERT IGNORE INTO `expense_settings` (`id`) VALUES (1);
 INSERT IGNORE INTO `users`
   (`id`,`name`,`email`,`password`,`role`,`is_active`,`created_by`,`status`,`assigned_shift`)
 VALUES
-  (1,'IV Superadmin','superadmin@ivsquarestructure.com','$2b$12$fuGBGnrn2ny71Kckxt60Vuv6IC0d6aKnwSjMQAnDR.uEOR774DLha','superadmin',1,NULL,'active',NULL);
+  (1,'IV Superadmin','superadmin@ivsquarestructure.com','$2b$12$/K97p1c6hX.5RXy9SveKnuXUgmq1ytipbh/SLmH51DaSo0CtjStoO','superadmin',1,NULL,'active',NULL);
 
 INSERT IGNORE INTO `financial_years`
   (`id`,`financial_year`,`created_by`)
@@ -690,7 +796,8 @@ INSERT IGNORE INTO `app_settings`
 VALUES
   ('zinc_alert_threshold',JSON_OBJECT('enabled',TRUE,'percentage',7.5),1),
   ('shift_schedule',JSON_OBJECT('automatic',TRUE,'day_start','08:00','night_start','20:00'),1),
-  ('maintenance_mode',JSON_OBJECT('enabled',FALSE,'message',''),1);
+  ('maintenance_mode',JSON_OBJECT('enabled',FALSE,'message',''),1),
+  ('labour_weight_mode',JSON_OBJECT('mode','manual'),1);
 
 INSERT IGNORE INTO `app_update_releases`
   (`platform`,`enabled`,`latest_version_code`,`latest_version_name`,`minimum_version_code`,`mandatory`,`updated_by`)
@@ -755,4 +862,21 @@ INSERT IGNORE INTO `schema_migrations` (`filename`,`checksum`,`execution_ms`) VA
 ('20260925000100_allow_negative_acid_ph.sql','12bd4ac9049f0772437e42102c5c3ad702e414a4bee9949317e48d3924b3984d',0),
 ('20260925000200_add_labour_role.sql','a519aa9b67ff94f433b6ace438ce36c610244f5085cc45b97198687967fa23d7',0),
 ('20260925000300_create_labour_weight_entries.sql','c403a422b4bce2bbcb174cc64419cba8fc5e7283a95c1da1d416c1d753219e9a',0),
-('20260925000400_target_shift_correction_user.sql','d83c6dd45e6d75e740e4327ce9db0f8847a789b059c9bef3ce5fe8de53522924',0);
+('20260925000400_target_shift_correction_user.sql','d83c6dd45e6d75e740e4327ce9db0f8847a789b059c9bef3ce5fe8de53522924',0),
+('20260927000100_create_gas_bottle_receipts.sql','9c4266e1fac0dd49564794ef032490558ed0cedfcb8ad82f8cf5f888a4fa5d2c',0),
+('20260927000200_create_gas_bottles.sql','ba2936d0331a6df9cf906738a2611e76f66e0a4611e1331c0da3282ee0891859',0),
+('20260927000300_create_gas_bottle_runs.sql','47dc62abb0f2444e1442486597858928de2ddd1282b182ac40b0a16aa75f5fbf',0),
+('20260928000100_link_labour_weight_production.sql','096c1d440cfc41483d5f51d33c63ed52e4118f59027c36226c1e6471e1d0578d',0),
+('20260928000200_add_gas_bottle_filled_weight.sql','e8408a0a35d9f15b756e8bd5fe9a2e861c8db193de71a7f172b6a7156a761ef8',0),
+('20260928000300_add_gas_run_empty_weight.sql','b3710648201f4a26046ca3e4ac6987e21b4a2912cfa2e083c4900541f23b4cd1',0),
+('20260928000400_add_labour_consumed_qty.sql','45a82949398c480945518d1debd7ba63c9024e9498e1565b45ef4f429bbc9a87',0),
+('20260928000500_create_labour_weight_consumptions.sql','ad8f717d8cf38871f78dc48140c406e3577f0437447e47c5ae18190b530add03',0),
+('20260929000100_add_labour_process_times.sql','2d46feeb3ac68d6d1fae35394ff1bee210cdc6b4bac3c26a95ea5b2e2311a9b7',0),
+('20260929000200_add_production_process_times.sql','289b0bba04000fdcdafa4ad1d25766fe9f1d11fe650b00f2f6a20ef02ad99cff',0),
+('20260929000300_add_labour_process_timers.sql','8ce492eaf67b883e5c1e35263391612bba6decec0717fe87cc3db2a07f2bf2c3',0),
+('20260929000400_add_production_process_durations.sql','7746342b27b88662eb9a79770195481cf90f78686f2c576d661ca9f0d2a47fc6',0),
+('20260929000500_add_labour_client_timer_starts.sql','8d6d80b976f051de3aca1e45fef9912775aca5cfd1c832527251efe9cf0b0451',0),
+('20260929000600_add_labour_timer_limits.sql','87be1d9ae6b54fb84b6bcb6ae5a0714d58a636d7462c831600f605bb1552c2aa',0),
+('20260929000700_add_production_zinc_kettle_duration.sql','d1a6dfe6c56c85d7f99a9cf950a85a115df11baca6a35a6e47f944845dde1ddd',0),
+('20260929000800_create_stock_alert_state.sql','04da6ab5f170309e08c060ac1fea41e38b3b253a0777529ab86426dc4e33c333',0),
+('20261001000100_add_gas_run_end_reason.sql','4d245ffc7de608f6f4491a73fa5996278d57251e3e31d01fa80e74c5d057b99a',0);
