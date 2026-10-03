@@ -11,7 +11,7 @@ router.get('/correction/shifts', authMiddleware, correctionManagers, listPreviou
 router.post('/correction', authMiddleware, correctionManagers, openCorrection);
 router.post('/correction/resume', authMiddleware, correctionManagers, resumeCurrentShift);
 router.get('/correction/planning-items', authMiddleware,
-  roleMiddleware(['superadmin', 'plant_manager', 'supervisor']),
+  roleMiddleware(['superadmin', 'admin', 'plant_manager', 'supervisor']),
   roleMiddleware([], 'production.save'), getCorrectionPlanningItems);
 // Live Production needs its target shift even when Shift Status is not enabled
 // separately in the user's feature permissions.

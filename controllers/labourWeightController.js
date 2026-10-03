@@ -6,6 +6,9 @@ const { DateTime } = require('luxon');
 const { hasPermission } = require('../services/permissionService');
 const { getSetting, clearSettingCache } = require('../services/appSettingsService');
 const { DEFAULT_LIMIT_SECONDS, effectiveStartMs, finishTimer, expireDueTimers } = require('../services/labourTimerService');
+const { getShiftSchedule, getCurrentShiftInfo } = require('../services/automaticShiftService');
+const { getProductionContext } = require('../services/productionShiftContextService');
+const { productionAtSql, getProductionTonsForPeriod } = require('../services/gasProductionService');
 
 const fail = (res, error) => {
   if (!error.status) console.error('Labour weight request failed:', error);
@@ -36,13 +39,12 @@ const timerColumns = {
   zinc_kettle: ['zinc_kettle_started_at', 'zinc_kettle_duration_seconds', 'zinc_kettle_client_started_at_ms'],
 };
 
-const fetchEntries = async (pendingOnly, todayOnly = false) => {
-  const today = DateTime.now().setZone('Asia/Kolkata').toISODate();
+const fetchEntries = async (pendingOnly, shift = null) => {
   const conditions = [
     ...(pendingOnly ? ["e.status='pending'"] : []),
-    ...(todayOnly ? ['e.created_at >= ? AND e.created_at < ?'] : []),
+    ...(shift ? ['e.created_at >= ? AND e.created_at < ?'] : []),
   ];
-  const params = todayOnly ? [today, DateTime.fromISO(today).plus({ days: 1 }).toISODate()] : [];
+  const params = shift ? [shift.shift_start, shift.shift_end] : [];
   const [rows] = await db.query(`SELECT e.id, e.labour_user_id, e.ms_weight, e.dipping_qty, e.consumed_qty,
     e.pickling_started_at, e.pickling_duration_seconds, e.pickling_client_started_at_ms,
     e.flux_started_at, e.flux_duration_seconds, e.flux_client_started_at_ms,
@@ -65,9 +67,10 @@ const list = async (req, res) => {
   try {
     await expireDueTimers(req.app.get('io'));
     const pendingOnly = req.query.pending === '1';
-    const rows = await fetchEntries(pendingOnly, true);
+    const shift = getCurrentShiftInfo(null, await getShiftSchedule());
+    const rows = await fetchEntries(pendingOnly, shift);
     const permitted = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'labour_weights.timer' });
-    return res.json({ success: true, data: rows.map(row => ({
+    return res.json({ success: true, shift: { name: shift.shift_name, date: shift.shift_date }, data: rows.map(row => ({
       ...row,
       can_run_timer: permitted && (req.user.role !== 'labour' || Number(row.labour_user_id) === Number(req.user.id)),
     })) });
@@ -77,7 +80,10 @@ const list = async (req, res) => {
 const listPending = async (req, res) => {
   try {
     await expireDueTimers(req.app.get('io'));
-    const rows = await fetchEntries(true);
+    const context = await getProductionContext(null, true, req.user.id);
+    const shift = { shift_start: context.shift?.start_time, shift_end: context.shift?.scheduled_end_time || context.shift?.end_time };
+    if (!shift.shift_start || !shift.shift_end) throw Object.assign(new Error('The production shift time is unavailable. Refresh and try again.'), { status: 409 });
+    const rows = await fetchEntries(true, shift);
     return res.json({ success: true, data: rows });
   } catch (error) { return fail(res, error); }
 };
@@ -104,6 +110,12 @@ const update = async (req, res) => {
     const entry = entries[0];
     if (!entry) throw Object.assign(new Error('Labour weight entry not found.'), { status: 404 });
     const role = String(req.user?.role || '').toLowerCase();
+    const requestedStatus = req.body.status;
+    if (requestedStatus != null && !['used', 'pending'].includes(requestedStatus)) throw bad('Choose a valid weight status.');
+    if (requestedStatus != null && requestedStatus !== entry.status && role !== 'superadmin') {
+      throw Object.assign(new Error('Only a superadmin can change a used weight back to pending.'), { status: 403 });
+    }
+    if (requestedStatus === 'used' && entry.status !== 'used') throw bad('A pending weight is marked used when production consumes it.');
     if (entry.status === 'used' && !['supervisor', 'superadmin'].includes(role)) {
       throw Object.assign(new Error('Only a supervisor or superadmin can edit a used weight.'), { status: 403 });
     }
@@ -122,6 +134,22 @@ const update = async (req, res) => {
       if (matches.length === 1) productionId = matches[0].id;
     }
     const [links] = await connection.query('SELECT production_entry_id, dipping_qty FROM labour_weight_consumptions WHERE labour_weight_id = ? ORDER BY id FOR UPDATE', [id]);
+    if (entry.status === 'used' && requestedStatus === 'pending') {
+      const linkedQty = links.length
+        ? links.reduce((total, link) => total + Number(link.dipping_qty), 0)
+        : productionId ? Math.max(Number(entry.consumed_qty), Number(entry.dipping_qty)) : Number(entry.consumed_qty);
+      if (linkedQty > 0 && ms !== Number(entry.ms_weight)) {
+        throw Object.assign(new Error('A weight linked to production must keep its MS weight. Edit the used weight normally to update production calculations.'), { status: 409 });
+      }
+      if (qty <= linkedQty) {
+        throw Object.assign(new Error(`Increase dip quantity above ${linkedQty} NOS to leave a pending balance; recorded production cannot be reused.`), { status: 409 });
+      }
+      await connection.query('UPDATE labour_weight_entries SET ms_weight = ?, dipping_qty = ?, consumed_qty = ?, status = ?, production_entry_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [ms, qty, linkedQty, 'pending', links[0]?.production_entry_id || productionId || null, id]);
+      await connection.commit();
+      req.app.get('io')?.emit('labour_weights_updated', { action: 'returned_to_pending', id });
+      return res.json({ success: true, message: 'Weight returned to pending with its recorded production preserved.' });
+    }
     const targets = entry.status === 'pending' ? [] : links.length ? links.map((link, index) => ({
       id: link.production_entry_id,
       qty: Number(link.dipping_qty) + (index === links.length - 1 ? qty - Number(entry.dipping_qty) : 0),
@@ -161,14 +189,14 @@ const update = async (req, res) => {
           await refreshProductionCost(connection, { entryId: monthEntry.id, shiftDate, zincPercentage: monthEntry.zinc_percentage });
         }
       }
-      const [gasRuns] = await connection.query(`SELECT id, started_at, finished_at, consumed_gas_kg
-        FROM gas_bottle_runs WHERE finished_at IS NOT NULL
-          AND TIMESTAMP(?, ?) BETWEEN started_at AND finished_at FOR UPDATE`, [shiftDate, production.production_time]);
+      const [gasRuns] = await connection.query(`SELECT gr.id, gr.started_at, gr.finished_at, gr.consumed_gas_kg
+        FROM gas_bottle_runs gr
+        JOIN production_entries pe ON pe.id = ?
+        LEFT JOIN shifts s ON s.id = pe.shift_id
+        WHERE gr.finished_at IS NOT NULL
+          AND ${productionAtSql} >= gr.started_at AND ${productionAtSql} < gr.finished_at FOR UPDATE`, [productionId]);
       for (const run of gasRuns) {
-        const [totals] = await connection.query(`SELECT ROUND(COALESCE(SUM(ms_weight * dipping_qty), 0) / 1000, 3) production_ton
-          FROM production_entries WHERE TIMESTAMP(shift_date, production_time) BETWEEN ? AND ?
-          AND COALESCE(row_type, 'entry') = 'entry'`, [run.started_at, run.finished_at]);
-        const tons = Number(totals[0].production_ton) || 0;
+        const tons = await getProductionTonsForPeriod(connection, run.started_at, run.finished_at);
         await connection.query('UPDATE gas_bottle_runs SET production_ton = ?, gas_kg_per_ton = ? WHERE id = ?',
           [tons, tons ? Number(run.consumed_gas_kg) / tons : null, run.id]);
       }
@@ -187,6 +215,54 @@ const update = async (req, res) => {
       io?.emit('gas_management_updated');
     }
     return res.json({ success: true, message: 'Weight entry updated.' });
+  } catch (error) { if (connection) await connection.rollback(); return fail(res, error); }
+  finally { connection?.release(); }
+};
+
+const listArchive = async (req, res) => {
+  if (!['superadmin', 'plant_manager'].includes(String(req.user?.role || '').toLowerCase())) {
+    return res.status(403).json({ success: false, message: 'Only superadmins and plant managers can view past labour weights.' });
+  }
+  const date = String(req.query.date || '');
+  const name = String(req.query.shift || '').toLowerCase();
+  const day = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !day.isValid || day.toISODate() !== date || !['day', 'night'].includes(name)) {
+    return res.status(400).json({ success: false, message: 'Select a valid production date and day or night shift.' });
+  }
+  try {
+    const schedule = await getShiftSchedule();
+    const [hour, minute] = schedule.day_start.split(':').map(Number);
+    const start = day.startOf('day').plus({ hours: hour + (name === 'night' ? 12 : 0), minutes: minute });
+    const shift = {
+      shift_start: start.toFormat('yyyy-MM-dd HH:mm:ss'),
+      shift_end: start.plus({ hours: 12 }).toFormat('yyyy-MM-dd HH:mm:ss'),
+    };
+    const rows = await fetchEntries(false, shift);
+    return res.json({ success: true, shift: { name, date }, data: rows.map(row => ({ ...row, can_run_timer: false })) });
+  } catch (error) { return fail(res, error); }
+};
+
+const remove = async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ success: false, message: 'Select a valid labour weight.' });
+  let connection;
+  try {
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.query('SELECT * FROM labour_weight_entries WHERE id = ? FOR UPDATE', [id]);
+    const entry = rows[0];
+    if (!entry) throw Object.assign(new Error('Labour weight not found.'), { status: 404 });
+    const [links] = await connection.query('SELECT id FROM labour_weight_consumptions WHERE labour_weight_id = ? LIMIT 1', [id]);
+    if (links.length || Number(entry.consumed_qty) > 0 || entry.production_entry_id != null || entry.status !== 'pending') {
+      throw Object.assign(new Error('This weight is already used or linked to production and cannot be deleted.'), { status: 409 });
+    }
+    if (Object.keys(timerColumns).some(process => entry[`${process}_started_at`])) {
+      throw Object.assign(new Error('Stop the running process timer before deleting this weight.'), { status: 409 });
+    }
+    await connection.query('DELETE FROM labour_weight_entries WHERE id = ?', [id]);
+    await connection.commit();
+    req.app.get('io')?.emit('labour_weights_updated', { action: 'deleted', id });
+    return res.json({ success: true, message: 'Unused labour weight deleted.' });
   } catch (error) { if (connection) await connection.rollback(); return fail(res, error); }
   finally { connection?.release(); }
 };
@@ -266,4 +342,4 @@ const consume = async (req, res) => {
   } catch (error) { return fail(res, error); }
 };
 
-module.exports = { list, listPending, create, update, consume, toggleTimer, getMode, setMode };
+module.exports = { list, listArchive, listPending, create, update, remove, consume, toggleTimer, getMode, setMode };

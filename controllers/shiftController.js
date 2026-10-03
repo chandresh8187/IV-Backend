@@ -7,6 +7,7 @@ const {
 const { getPlantStatusRow } = require("./plantStatusController");
 const { getProductionContext } = require('../services/productionShiftContextService');
 const { hasPermission } = require('../services/permissionService');
+const db = require('../config/db');
 
 const getShiftStatus = async (req, res) => {
   try {
@@ -14,6 +15,13 @@ const getShiftStatus = async (req, res) => {
     const activeShift = await ensureAutomaticShift();
     const shiftCorrectionAllowed = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct' });
     const productionContext = await getProductionContext(activeShift, shiftCorrectionAllowed, req.user.id);
+    const correctionShiftId = productionContext.state.correction_shift_id;
+    const [correctionShifts] = shiftCorrectionAllowed && correctionShiftId
+      ? await db.query(
+        `SELECT *, DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
+         FROM shifts WHERE id = ? AND status = 'closed'`, [correctionShiftId],
+      )
+      : [[]];
     const calculated = getCurrentShiftInfo(null, schedule);
     const plantStatus = await getPlantStatusRow();
 
@@ -43,6 +51,7 @@ const getShiftStatus = async (req, res) => {
         correction_opened_by: productionContext.state.opened_by,
         correction_opened_at: productionContext.state.opened_at,
         correction_user_id: productionContext.state.correction_user_id,
+        correction_shift: correctionShifts[0] || null,
         correction_production_allowed: productionContext.correction,
         plant_status: plantStatus.status,
         production_allowed:

@@ -462,8 +462,13 @@ const saveProductionEntry = async (req, res) => {
               ? 'Select the labour weight for the dip currently on the kettle.'
               : 'No pending labour weight is available. Add a labour weight first.'), { status: 400 });
           }
+          const weightShiftStart = activeShift.start_time;
+          const weightShiftEnd = activeShift.scheduled_end_time || activeShift.end_time;
+          if (labour_weight_id != null && (!weightShiftStart || !weightShiftEnd)) {
+            throw Object.assign(new Error('The production shift time is unavailable. Refresh and try again.'), { status: 409 });
+          }
           if (configuredWeightMode === 'auto' && labour_weight_id != null) {
-            const [firstPending] = await connection.query("SELECT id FROM labour_weight_entries WHERE status = 'pending' ORDER BY id LIMIT 1 FOR UPDATE");
+            const [firstPending] = await connection.query("SELECT id FROM labour_weight_entries WHERE status = 'pending' AND created_at >= ? AND created_at < ? ORDER BY id LIMIT 1 FOR UPDATE", [weightShiftStart, weightShiftEnd]);
             if (Number(firstPending?.[0]?.id) !== Number(labour_weight_id)) {
               throw Object.assign(new Error('The next automatic labour weight has changed. Refresh and reopen the production form.'), { status: 409 });
             }
@@ -476,11 +481,11 @@ const saveProductionEntry = async (req, res) => {
             const [labourRows] = await connection.query(
               `SELECT id, ms_weight, dipping_qty, consumed_qty, production_entry_id,
                       pickling_duration_seconds, flux_duration_seconds, hot_drier_duration_seconds, zinc_kettle_duration_seconds FROM labour_weight_entries
-               WHERE id = ? AND status = 'pending' FOR UPDATE`,
-              [labourEntryId],
+               WHERE id = ? AND status = 'pending' AND created_at >= ? AND created_at < ? FOR UPDATE`,
+              [labourEntryId, weightShiftStart, weightShiftEnd],
             );
             if (!labourRows.length) {
-              throw Object.assign(new Error('This labour weight entry was already used. Refresh and reopen the production form.'), { status: 409 });
+              throw Object.assign(new Error('This labour weight was used or belongs to another shift. Refresh and reopen the production form.'), { status: 409 });
             }
             const labour = labourRows[0];
             labourProcessTimes = labour;
@@ -982,10 +987,7 @@ const getProductions = async (req, res) => {
       permissionKey: "production.manage_all",
     });
     const correction = await getCorrectionState();
-    const shiftCorrectionAllowed = await hasPermission({
-      userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct',
-    });
-    const canCorrect = correction.correction_shift_id && shiftCorrectionAllowed && await hasPermission({
+    const canCorrect = correction.correction_shift_id && Number(correction.correction_user_id) === Number(req.user.id) && await hasPermission({
       userId: req.user.id, role: req.user.role, permissionKey: 'production.save',
     });
 

@@ -12,13 +12,13 @@ const {
 router.get(
   "/status",
   authMiddleware,
-  roleMiddleware(["admin", "plant_manager", "superadmin"], "plant.view"),
+  roleMiddleware(["admin", "plant_manager", "superadmin", "supervisor"], "production.view"),
   getPlantStatus,
 );
 router.post(
   "/status",
   authMiddleware,
-  roleMiddleware(["plant_manager", "superadmin"], "plant.manage"),
+  roleMiddleware(["plant_manager", "superadmin", "supervisor"], "production.status"),
   changePlantStatus,
 );
 router.get(

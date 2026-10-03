@@ -35,6 +35,9 @@ function fixture() {
         await connection.query(`UPDATE production_entries SET ${process}_duration_seconds = ? WHERE id = ?`, [seconds, current.production_entry_id]);
       },
     },
+    '../services/automaticShiftService': {},
+    '../services/productionShiftContextService': {},
+    '../services/gasProductionService': { productionAtSql: 'TIMESTAMP(pe.shift_date, pe.production_time)', getProductionTonsForPeriod: async () => 0 },
     luxon: require('luxon'),
   };
   const module = { exports: {} };

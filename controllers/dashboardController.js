@@ -82,18 +82,12 @@ const getDashboardData = async (req, res) => {
 
         FROM (
           SELECT
-            material,
-
-            AVG(NULLIF(ms_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-              AS ms_material_weight,
-
-            AVG(NULLIF(gi_weight, 0)) * COALESCE(SUM(dipping_qty), 0)
-              AS gi_material_weight,
-            COALESCE(SUM(dipping_qty), 0) AS material_qty
-
+            COALESCE(ms_weight, 0) * COALESCE(dipping_qty, 0) AS ms_material_weight,
+            COALESCE(gi_weight, 0) * COALESCE(dipping_qty, 0) AS gi_material_weight,
+            COALESCE(dipping_qty, 0) AS material_qty
           FROM production_entries
           ${whereQuery}
-          GROUP BY material
+          AND COALESCE(row_type, 'entry') = 'entry'
         ) AS material_total
         `,
         params,
@@ -164,14 +158,14 @@ const getDashboardData = async (req, res) => {
               ROUND(COALESCE(SUM(ms_total),0),3) total_ms_production_kg,
               ROUND(COALESCE(SUM(gi_total),0),3) total_gi_production_kg
        FROM (
-         SELECT shift_date production_date, material,
+         SELECT shift_date production_date,
                 COALESCE(SUM(dipping_qty),0) material_qty,
-                AVG(NULLIF(ms_weight,0))*COALESCE(SUM(dipping_qty),0) ms_total,
-                AVG(NULLIF(gi_weight,0))*COALESCE(SUM(dipping_qty),0) gi_total
+                COALESCE(SUM(COALESCE(ms_weight,0)*COALESCE(dipping_qty,0)),0) ms_total,
+                COALESCE(SUM(COALESCE(gi_weight,0)*COALESCE(dipping_qty,0)),0) gi_total
          FROM production_entries
          WHERE MONTH(shift_date)=? AND YEAR(shift_date)=?
            AND COALESCE(row_type,'entry')='entry'
-         GROUP BY shift_date, material
+         GROUP BY shift_date
        ) daily_materials
        GROUP BY production_date ORDER BY production_date ASC`,
       [shiftInfo.month, shiftInfo.year],

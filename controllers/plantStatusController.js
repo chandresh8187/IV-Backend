@@ -1,6 +1,11 @@
 const db = require("../config/db");
+const { DateTime } = require('luxon');
 
-const VALID_STATUSES = ["running", "maintenance", "stopped"];
+const VALID_STATUSES = ["running", "stopped"];
+const ZONE = 'Asia/Kolkata';
+const asLocalTime = value => value instanceof Date
+  ? DateTime.fromJSDate(value, { zone: ZONE })
+  : DateTime.fromSQL(String(value || '').replace('T', ' ').slice(0, 19), { zone: ZONE });
 
 const getPlantStatusRow = async (executor = db) => {
   const [rows] = await executor.query(
@@ -61,22 +66,21 @@ const changePlantStatus = async (req, res) => {
   const connection = await db.getConnection();
 
   try {
-    const { status, title, message, expected_restart_at = null } = req.body;
-    const normalizedTitle = String(title || "").trim();
-    const normalizedMessage = String(message || "").trim();
-    let expectedRestartAt = null;
+    const { status, title, message, occurred_at } = req.body;
+    const normalizedMessage = String(message || title || "").trim();
+    const normalizedTitle = String(title || normalizedMessage.slice(0, 200)).trim();
 
     if (!VALID_STATUSES.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "status must be running, maintenance or stopped",
+        message: "status must be running or stopped",
       });
     }
 
-    if (status !== "running" && (!normalizedTitle || !normalizedMessage)) {
+    if (status !== "running" && !normalizedMessage) {
       return res.status(400).json({
         success: false,
-        message: "title and message are required",
+        message: "Enter a reason for stopping production",
       });
     }
 
@@ -87,18 +91,11 @@ const changePlantStatus = async (req, res) => {
       });
     }
 
-    if (status !== "running" && expected_restart_at) {
-      const input = String(expected_restart_at).trim();
-      const parsed = new Date(input);
-      if (Number.isNaN(parsed.getTime())) {
-        return res.status(400).json({
-          success: false,
-          message: "Expected restart time is invalid",
-        });
-      }
-      expectedRestartAt = input.replace("T", " ").slice(0, 19);
-      if (expectedRestartAt.length === 16) expectedRestartAt += ":00";
+    const eventTime = occurred_at == null ? DateTime.now().setZone(ZONE) : asLocalTime(occurred_at);
+    if (!eventTime.isValid || eventTime.toMillis() > DateTime.now().plus({ minutes: 1 }).toMillis()) {
+      return res.status(400).json({ success: false, message: 'Enter a valid stop or resume time that is not in the future.' });
     }
+    const effectiveAt = eventTime.toFormat('yyyy-MM-dd HH:mm:ss');
 
     await connection.beginTransaction();
 
@@ -115,17 +112,25 @@ const changePlantStatus = async (req, res) => {
     }
 
     const current = currentRows[0];
+    if ((status === 'running' && current.status === 'running') || (status === 'stopped' && current.status !== 'running')) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: status === 'running' ? 'Production is already running.' : 'Production is already stopped. Resume it before recording another stop.' });
+    }
+    if (current.started_at && eventTime.toMillis() < asLocalTime(current.started_at).toMillis()) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'The event time must be after the previous production status change.' });
+    }
 
     if (["maintenance", "stopped"].includes(current.status)) {
       await connection.query(
         `
         UPDATE plant_status_history
-        SET ended_at = NOW(), ended_by = ?
+        SET ended_at = ?, ended_by = ?
         WHERE ended_at IS NULL AND status = ?
         ORDER BY id DESC
         LIMIT 1
         `,
-        [req.user.id, current.status],
+        [effectiveAt, req.user.id, current.status],
       );
     }
 
@@ -134,29 +139,29 @@ const changePlantStatus = async (req, res) => {
         `
         UPDATE plant_status
         SET status = 'running', title = NULL, message = NULL,
-            started_at = NOW(), expected_restart_at = NULL, updated_by = ?
+            started_at = ?, expected_restart_at = NULL, updated_by = ?
         WHERE id = 1
         `,
-        [req.user.id],
+        [effectiveAt, req.user.id],
       );
     } else {
       await connection.query(
         `
         UPDATE plant_status
-        SET status = ?, title = ?, message = ?, started_at = NOW(),
-            expected_restart_at = ?, updated_by = ?
+        SET status = 'stopped', title = ?, message = ?, started_at = ?,
+            expected_restart_at = NULL, updated_by = ?
         WHERE id = 1
         `,
-        [status, normalizedTitle, normalizedMessage, expectedRestartAt, req.user.id],
+        [normalizedTitle, normalizedMessage, effectiveAt, req.user.id],
       );
 
       await connection.query(
         `
         INSERT INTO plant_status_history
           (status, title, message, started_at, expected_restart_at, started_by)
-        VALUES (?, ?, ?, NOW(), ?, ?)
+        VALUES ('stopped', ?, ?, ?, NULL, ?)
         `,
-        [status, normalizedTitle, normalizedMessage, expectedRestartAt, req.user.id],
+        [normalizedTitle, normalizedMessage, effectiveAt, req.user.id],
       );
     }
 
@@ -166,16 +171,17 @@ const changePlantStatus = async (req, res) => {
     const data = serializeStatus(updated);
     const io = req.app.get("io");
 
-    if (io) io.emit("plant_status_updated", data);
+    if (io) {
+      io.emit("plant_status_updated", data);
+      io.emit("gas_management_updated");
+    }
 
     return res.json({
       success: true,
       message:
         status === "running"
-          ? "Plant marked as running"
-          : status === "maintenance"
-            ? "Plant maintenance started"
-            : "Plant marked as stopped",
+          ? "Production resumed"
+          : "Production stopped",
       data,
     });
   } catch (error) {
@@ -202,7 +208,6 @@ const getPlantStatusHistory = async (req, res) => {
       LEFT JOIN users starter ON starter.id = h.started_by
       LEFT JOIN users ender ON ender.id = h.ended_by
       ORDER BY h.started_at DESC
-      LIMIT 200
       `,
     );
 

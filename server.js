@@ -64,17 +64,6 @@ app.use("/downloads/apks", express.static(path.join(__dirname, "uploads/apks"), 
   maxAge: "365d",
 }));
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: Number(process.env.API_RATE_LIMIT) || 600,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: "Too many requests. Please try again shortly.",
-  },
-});
-
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: Number(process.env.LOGIN_RATE_LIMIT) || 20,
@@ -101,7 +90,6 @@ app.get("/health", async (req, res) => {
   }
 });
 
-app.use("/api", apiLimiter);
 app.use("/api/auth/login", loginLimiter);
 app.use("/api", maintenanceModeMiddleware);
 

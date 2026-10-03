@@ -7,6 +7,7 @@ const path = require('node:path');
 function fixture({ secondItem = 7, nextCapacity = 30 } = {}) {
   const weight = { id: 9, ms_weight: 12, dipping_qty: 40, consumed_qty: 0, production_entry_id: null, status: 'pending', pickling_duration_seconds: 206, flux_duration_seconds: 93, hot_drier_duration_seconds: 60 };
   const writes = [];
+  const weightReads = [];
   let nextId = 101;
   const plans = {
     1: { planning_id: 11, planning_item_id: 1, item_id: 7, challan_no: 'A', party_name: 'Party', material_description: 'Pipe', planned_qty: 10, completed_qty: 0 },
@@ -19,7 +20,10 @@ function fixture({ secondItem = 7, nextCapacity = 30 } = {}) {
     if (sql.includes('SELECT ppi.item_id, ppi.material_description')) return [[plans[2]]];
     if (sql.includes('FROM production_planning_items ppi JOIN')) return [[plans[params[0]]]];
     if (sql.includes('AS used_qty')) return [[{ used_qty: plans[params[0] === 11 ? 1 : 2].completed_qty }]];
-    if (sql.includes('SELECT id, ms_weight, dipping_qty, consumed_qty')) return [weight.status === 'pending' ? [{ ...weight }] : []];
+    if (sql.includes('SELECT id, ms_weight, dipping_qty, consumed_qty')) {
+      weightReads.push({ sql, params });
+      return [weight.status === 'pending' ? [{ ...weight }] : []];
+    }
     if (sql.includes('SELECT item_id, material FROM production_entries')) return [[production.get(params[0])]];
     if (sql.includes('AS next_sr_no')) return [[{ next_sr_no: nextId - 100 }]];
     if (sql.includes('INSERT INTO production_entries')) {
@@ -40,7 +44,7 @@ function fixture({ secondItem = 7, nextCapacity = 30 } = {}) {
   const mocks = {
     '../config/db': { query, getConnection: async () => connection },
     '../services/permissionService': { hasPermission: async () => true },
-    '../services/productionShiftContextService': { getProductionContext: async () => ({ shift: { id: 1, shift_date: '2026-09-28', shift_name: 'day' } }), assertContext() {}, lockProductionContext: async () => {} },
+    '../services/productionShiftContextService': { getProductionContext: async () => ({ shift: { id: 1, shift_date: '2026-09-28', shift_name: 'day', start_time: '2026-09-28 08:00:00', scheduled_end_time: '2026-09-28 20:00:00' } }), assertContext() {}, lockProductionContext: async () => {} },
     './plantStatusController': { getPlantStatusRow: async () => ({ status: 'running' }) },
     '../services/productionContractorService': { validateContractor: async () => null },
     '../services/productionZincStockService': { calculateProductionZincKg: () => 0, applyProductionZinc: async () => {} },
@@ -58,7 +62,7 @@ function fixture({ secondItem = 7, nextCapacity = 30 } = {}) {
     if (res.code === 201) plans[planId].completed_qty += qty;
     return res;
   }
-  return { save, weight, writes, plans };
+  return { save, weight, writes, weightReads, plans };
 }
 
 test('40 labour NOS can save 10 then 30 on same-material challans', async () => {
@@ -70,6 +74,11 @@ test('40 labour NOS can save 10 then 30 on same-material challans', async () => 
   assert.equal(f.weight.consumed_qty, 40);
   assert.equal(f.weight.status, 'used');
   assert.equal(f.writes.filter(write => write.sql.includes('INSERT INTO labour_weight_consumptions')).length, 2);
+  assert.equal(f.weightReads.length, 2);
+  for (const read of f.weightReads) {
+    assert.match(read.sql, /created_at >= \? AND created_at < \?/);
+    assert.deepEqual(Array.from(read.params.slice(-2)), ['2026-09-28 08:00:00', '2026-09-28 20:00:00']);
+  }
   for (const insert of f.writes.filter(write => write.sql.includes('INSERT INTO production_entries'))) {
     assert.deepEqual(Array.from(insert.params.slice(23, 26)), [206, 93, 60]);
     assert.equal((insert.sql.match(/\?/g) || []).length, insert.params.length);
