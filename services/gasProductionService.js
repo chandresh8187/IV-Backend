@@ -4,6 +4,22 @@ const asMillis = value => value instanceof Date
   ? value.getTime()
   : DateTime.fromSQL(String(value).replace('T', ' ').slice(0, 19), { zone: 'Asia/Kolkata' }).toMillis();
 
+const mergedDurationMillis = intervals => {
+  const sorted = intervals.filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let current = null;
+  for (const [start, end] of sorted) {
+    if (!current || start > current[1]) {
+      if (current) total += current[1] - current[0];
+      current = [start, end];
+    } else {
+      current[1] = Math.max(current[1], end);
+    }
+  }
+  return total + (current ? current[1] - current[0] : 0);
+};
+
 const getRunTimeBreakdown = async (queryable, runs) => {
   if (!runs.length) return new Map();
   const starts = runs.map(run => asMillis(run.started_at)).filter(Number.isFinite);
@@ -16,13 +32,16 @@ const getRunTimeBreakdown = async (queryable, runs) => {
     const start = asMillis(run.started_at);
     const end = run.finished_at ? asMillis(run.finished_at) : now;
     const elapsed = Math.max(0, Math.floor((end - start) / 1000));
-    const stopped = (pauses || []).reduce((total, pause) => {
+    const stopIntervals = (pauses || []).map(pause => {
       const pauseStart = asMillis(pause.started_at);
       const pauseEnd = pause.ended_at ? asMillis(pause.ended_at) : now;
-      return total + Math.max(0, Math.min(end, pauseEnd) - Math.max(start, pauseStart));
-    }, 0);
-    const stoppedSeconds = Math.min(elapsed, Math.floor(stopped / 1000));
-    return [Number(run.id), { elapsed_seconds: elapsed, stopped_seconds: stoppedSeconds, production_active_seconds: elapsed - stoppedSeconds }];
+      return [Math.max(start, pauseStart), Math.min(end, pauseEnd)];
+    });
+    const stoppedSeconds = Math.min(elapsed, Math.floor(mergedDurationMillis(stopIntervals) / 1000));
+    const availableSeconds = Math.max(0, elapsed - stoppedSeconds);
+    const lunchBreakSeconds = Math.min(availableSeconds, Math.ceil(availableSeconds / (12 * 3600)) * 1800);
+    const productionActiveSeconds = availableSeconds - lunchBreakSeconds;
+    return [Number(run.id), { elapsed_seconds: elapsed, stopped_seconds: stoppedSeconds, lunch_break_seconds: lunchBreakSeconds, production_active_seconds: productionActiveSeconds }];
   }));
 };
 
