@@ -13,6 +13,7 @@ const { connectUser, disconnectUser, getOnlineUserIds, enterChat, leaveChat } = 
 const { hasPermission } = require('./services/permissionService');
 
 const db = require("./config/db");
+const unit1Db = require("./config/unit1Db");
 const maintenanceModeMiddleware = require("./middleware/maintenanceModeMiddleware");
 const { run: runMigrations } = require("./scripts/migrate");
 
@@ -168,6 +169,8 @@ io.on("connection", async (socket) => {
 });
 
 app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/unit1/coils", require("./routes/unit1CoilRoutes"));
+app.use("/api/unit1/materials-grades", require("./routes/unit1MaterialGradeRoutes"));
 app.use("/api/productions", require("./routes/productionRoutes"));
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/shifts", require("./routes/shiftRoutes"));
@@ -237,8 +240,6 @@ const startServer = async () => {
     catch (error) { console.error('Labour timer expiry failed:', error); }
     finally { timerSweepRunning = false; }
   };
-  setInterval(sweepTimers, 1000).unref();
-  sweepTimers();
   const { checkStockAlerts } = require('./services/stockAlertService');
   let stockCheckRunning = false;
   const checkStocks = async () => {
@@ -248,9 +249,6 @@ const startServer = async () => {
     catch (error) { console.error('Stock alert check failed:', error); }
     finally { stockCheckRunning = false; }
   };
-  setInterval(checkStocks, 30000).unref();
-  checkStocks();
-
   await new Promise((resolve, reject) => {
     const onError = (error) => {
       server.off("listening", onListening);
@@ -267,12 +265,18 @@ const startServer = async () => {
     server.listen(port);
   });
 
+  setInterval(sweepTimers, 1000).unref();
+  sweepTimers();
+  setInterval(checkStocks, 30000).unref();
+  checkStocks();
+
   return server;
 };
 
 const startup = startServer().catch(async (error) => {
   console.error(`Server startup failed: ${error.message}`);
   await db.end().catch(() => {});
+  await unit1Db.end().catch(() => {});
   process.exitCode = 1;
 });
 
@@ -280,6 +284,7 @@ const shutdown = (signal) => {
   console.log(`${signal} received; closing server`);
   server.close(async () => {
     await db.end();
+    await unit1Db.end();
     process.exit(0);
   });
 

@@ -3,6 +3,9 @@ const db = require("../config/db");
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
+  { key: 'unit1.coils.view', group: 'Unit 1 Coil Stock', label: 'View Unit 1 coils', description: 'View Unit 1 coil stock and inward records.', defaultRoles: ALL_ROLES },
+  { key: 'unit1.coils.create', group: 'Unit 1 Coil Stock', label: 'Record Unit 1 coil inward', description: 'Add received coils to Unit 1 stock.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'unit1.materials.manage', group: 'Unit 1 Coil Stock', label: 'Manage Unit 1 material grades', description: 'Add, edit, and delete allowed grades for Unit 1 materials.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'gas.view', group: 'Gas Management', label: 'View gas management', description: 'View bottle inventory, vaporizer positions, consumption, and production efficiency.', defaultRoles: ALL_ROLES },
   { key: 'gas.manage', group: 'Gas Management', label: 'Manage gas bottle stock', description: 'Receive bottles, record filled weights and start gas supply.', defaultRoles: ['superadmin', 'plant_manager'] },
   { key: 'gas.operate', group: 'Gas Management', label: 'Start and switch gas bottles', description: 'Record bottle start, finish, remaining gas, and the next running position.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
