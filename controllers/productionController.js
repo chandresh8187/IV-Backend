@@ -83,11 +83,7 @@ const calculateAvgCoating = (readings) => {
 
 const saveProductionEntry = async (req, res) => {
   try {
-    const retiredOfflineFields = [
-      "client_request_id",
-      "offline_shift_id",
-      "offline_user_id",
-    ];
+    const retiredOfflineFields = ["offline_shift_id", "offline_user_id"];
     if (
       retiredOfflineFields.some((field) =>
         Object.prototype.hasOwnProperty.call(req.body || {}, field),
@@ -99,6 +95,21 @@ const saveProductionEntry = async (req, res) => {
         message:
           "Offline production entries are no longer supported. Reopen the form while online and save again.",
       });
+    }
+
+    const requestId = req.body?.client_request_id;
+    if (requestId != null) {
+      if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{16,64}$/.test(requestId) ||
+          req.body.entry_type !== 'full' || Number(req.body.entry_id || 0) !== 0) {
+        return res.status(400).json({ success: false, message: 'Invalid offline production request.' });
+      }
+      const [replayed] = await db.query(
+        'SELECT id, created_by FROM production_entries WHERE client_request_id = ? LIMIT 1', [requestId],
+      );
+      if (replayed.length) {
+        if (Number(replayed[0].created_by) !== Number(req.user.id)) return res.status(403).json({ success: false, message: 'This request belongs to another user.' });
+        return res.json({ success: true, action: 'already_saved', message: 'Production entry already saved', data: { production_id: replayed[0].id } });
+      }
     }
 
     const {
@@ -541,9 +552,9 @@ const saveProductionEntry = async (req, res) => {
                material, production_time, dipping_qty, kettle_temperature,
                ms_weight, gi_weight, zinc_percentage, production_weight,
                c1, c2, c3, c4, c5, avg_coating,
-               pickling_duration_seconds, flux_duration_seconds, hot_drier_duration_seconds, zinc_kettle_duration_seconds, row_type, created_by,
+               pickling_duration_seconds, flux_duration_seconds, hot_drier_duration_seconds, zinc_kettle_duration_seconds, row_type, created_by, client_request_id,
                zinc_stock_deducted_kg, contractor_id)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'entry', ?, ?, ?, ?)`,
             [
               activeShift.id,
               activeShift.shift_date,
@@ -573,6 +584,7 @@ const saveProductionEntry = async (req, res) => {
               labourProcessTimes?.hot_drier_duration_seconds ?? null,
               labourProcessTimes?.zinc_kettle_duration_seconds ?? null,
               req.user.id,
+              requestId || null,
               zincStockKg,
               contractorId,
             ],
@@ -955,6 +967,15 @@ const saveProductionEntry = async (req, res) => {
       });
     }
   } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY' && req.body?.client_request_id) {
+      const [replayed] = await db.query(
+        'SELECT id, created_by FROM production_entries WHERE client_request_id = ? LIMIT 1',
+        [req.body.client_request_id],
+      );
+      if (replayed.length && Number(replayed[0].created_by) === Number(req.user.id)) {
+        return res.json({ success: true, action: 'already_saved', message: 'Production entry already saved', data: { production_id: replayed[0].id } });
+      }
+    }
     console.error("saveProductionEntry:", error);
     return res.status(error.status || 500).json({
       success: false,
