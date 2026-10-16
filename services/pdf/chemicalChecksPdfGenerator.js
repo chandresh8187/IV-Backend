@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawReportHeader, drawReportFooters } = require('./reportBranding');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const clean = value => String(value == null || value === '' ? '-' : value)
@@ -12,6 +13,7 @@ const fit = (value, font, size, width) => {
 
 async function generateChemicalChecksPdf(rows, periodLabel) {
   const pdf = await PDFDocument.create();
+  const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const pageSize = [841.89, 595.28];
@@ -30,18 +32,14 @@ async function generateChemicalChecksPdf(rows, periodLabel) {
   let y;
   const addPage = () => {
     page = pdf.addPage(pageSize);
-    y = 559;
-    page.drawText('IV SQUARE STRUCTURE INDIA PVT LTD', { x: 35, y, size: 15, font: bold, color: rgb(0.04, 0.12, 0.23) });
-    page.drawText('DAILY FLUX & ACID CHECKS', { x: 620, y: y + 1, size: 10, font: bold, color: rgb(0.25, 0.18, 0.5) });
-    page.drawText(clean(periodLabel), { x: 35, y: y - 17, size: 8, font: regular, color: rgb(0.35, 0.38, 0.45) });
-    y -= 43;
+    y = drawReportHeader(page, { regular, bold }, logo, { title: 'DAILY FLUX & ACID CHECKS', subtitle: periodLabel, margin: 35 });
     page.drawRectangle({ x: 35, y: y - 17, width: 772, height: 22, color: rgb(0.04, 0.12, 0.23) });
     columns.forEach(([title,,x]) => page.drawText(title, { x, y: y - 10, size: 7, font: bold, color: rgb(1, 1, 1) }));
     y -= 22;
   };
   addPage();
   rows.forEach((row, index) => {
-    if (y < 48) addPage();
+    if (y - 20 < 48) addPage();
     if (index % 2) page.drawRectangle({ x: 35, y: y - 17, width: 772, height: 20, color: rgb(0.95, 0.95, 0.98) });
     columns.forEach(([, key, x, width]) => page.drawText(fit(row[key], regular, 7, width), {
       x, y: y - 10, size: 7, font: regular, color: rgb(0.1, 0.12, 0.2),
@@ -49,6 +47,7 @@ async function generateChemicalChecksPdf(rows, periodLabel) {
     y -= 20;
   });
   if (!rows.length) page.drawText('No chemical checks were recorded for this period.', { x: 35, y: y - 14, size: 10, font: regular });
+  drawReportFooters(pdf, { regular, bold }, 'Chemical checks | '+clean(periodLabel), 35);
   return Buffer.from(await pdf.save());
 }
 

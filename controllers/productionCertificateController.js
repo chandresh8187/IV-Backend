@@ -18,6 +18,7 @@ const generateNextTcNo = async (inspectionDate) => {
     `
     SELECT tc_no
     FROM coating_certificates
+    -- Include deleted certificates so an issued TC number is never reused.
     WHERE tc_no LIKE ?
     ORDER BY id DESC
     LIMIT 1
@@ -156,6 +157,13 @@ const createCertificate = async (req, res) => {
   try {
     const {
       planning_id,
+      third_party_name,
+      client_name,
+      client_address,
+      invoice_no,
+      material_description,
+      minimum_coating,
+      maximum_coating,
       structure,
       quantity,
       inspection_date,
@@ -182,6 +190,15 @@ const createCertificate = async (req, res) => {
         message:
           "planning_id, inspection_date and reference_standard are required",
       });
+    }
+
+    const hasMinimum = minimum_coating !== undefined && minimum_coating !== null && minimum_coating !== "";
+    const hasMaximum = maximum_coating !== undefined && maximum_coating !== null && maximum_coating !== "";
+    if (hasMinimum !== hasMaximum || (hasMinimum && (
+      !Number.isFinite(Number(minimum_coating)) || !Number.isFinite(Number(maximum_coating)) ||
+      Number(minimum_coating) < 0 || Number(maximum_coating) < Number(minimum_coating)
+    ))) {
+      return res.status(400).json({ success: false, message: "Enter a valid minimum and maximum coating range" });
     }
 
     const [planningRows] = await db.query(
@@ -220,6 +237,12 @@ const createCertificate = async (req, res) => {
             challan_no,
             party_name,
             third_party_name,
+            client_name,
+            client_address,
+            invoice_no,
+            material_description,
+            minimum_coating,
+            maximum_coating,
             structure,
             quantity,
             inspection_date,
@@ -238,14 +261,20 @@ const createCertificate = async (req, res) => {
             remarks,
             created_by
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
             tcNo,
             planning.id,
             planning.challan_no,
             planning.party_name,
-            planning.third_party_name || null,
+            third_party_name === undefined ? planning.third_party_name || null : third_party_name || null,
+            client_name || null,
+            client_address || null,
+            invoice_no || null,
+            material_description || planning.material_description || null,
+            hasMinimum ? Number(minimum_coating) : null,
+            hasMaximum ? Number(maximum_coating) : null,
             structure || planning.material_description || null,
             quantity || String(planning.planned_qty || ""),
             inspection_date,
@@ -315,7 +344,7 @@ const getCertificates = async (req, res) => {
         creator.name AS created_by_name
       FROM coating_certificates cc
       LEFT JOIN users creator ON creator.id = cc.created_by
-      WHERE 1 = 1
+      WHERE cc.deleted_at IS NULL
     `;
     const params = [];
 
@@ -357,7 +386,7 @@ const getCertificateById = async (req, res) => {
         creator.name AS created_by_name
       FROM coating_certificates cc
       LEFT JOIN users creator ON creator.id = cc.created_by
-      WHERE cc.id = ?
+      WHERE cc.id = ? AND cc.deleted_at IS NULL
       `,
       [id],
     );
@@ -381,9 +410,32 @@ const getCertificateById = async (req, res) => {
   }
 };
 
+const deleteCertificates = async (req, res) => {
+  try {
+    const submitted = req.params.id != null ? [req.params.id] : req.body?.ids;
+    if (!Array.isArray(submitted) || submitted.length < 1 || submitted.length > 100) {
+      return res.status(400).json({ success: false, message: "Select 1 to 100 certificates to delete." });
+    }
+    const ids = [...new Set(submitted.map(Number))];
+    if (ids.some(id => !Number.isSafeInteger(id) || id < 1)) {
+      return res.status(400).json({ success: false, message: "Select valid certificates to delete." });
+    }
+    const placeholders = ids.map(() => "?").join(",");
+    const [result] = await db.query(
+      `UPDATE coating_certificates SET deleted_at = NOW() WHERE id IN (${placeholders}) AND deleted_at IS NULL`, ids,
+    );
+    if (result.affectedRows) req.app.get("io")?.emit("certificate_updated", { action: "deleted", ids });
+    return res.json({ success: true, message: `${result.affectedRows} certificate(s) deleted. TC numbers remain reserved.`, data: { deleted_count: result.affectedRows } });
+  } catch (error) {
+    console.error("deleteCertificates:", error);
+    return res.status(500).json({ success: false, message: "Could not delete certificates." });
+  }
+};
+
 module.exports = {
   createCertificate,
   getCertificateReadings,
   getCertificates,
   getCertificateById,
+  deleteCertificates,
 };

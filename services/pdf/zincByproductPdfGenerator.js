@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawReportHeader, drawReportFooters } = require('./reportBranding');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const PAGE = { width: 841.89, height: 595.28, margin: 34 };
 const clean = value => String(value == null || value === '' ? '-' : value).normalize('NFKD').replace(/[^\x20-\x7E]/g, '');
@@ -12,6 +13,7 @@ const kg = value => Number(value || 0).toLocaleString('en-IN', { maximumFraction
 
 async function generateZincByproductPdf(rows) {
   const pdf = await PDFDocument.create();
+  const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const columns = [
@@ -24,17 +26,15 @@ async function generateZincByproductPdf(rows) {
   ];
   let page; let y;
   const addPage = () => {
-    page = pdf.addPage([PAGE.width, PAGE.height]); y = PAGE.height - PAGE.margin;
-    page.drawText('IV SQUARE STRUCTURE INDIA PVT LTD', { x: PAGE.margin, y, size: 15, font: bold, color: rgb(0.04, 0.12, 0.23) });
-    page.drawText('ASH & DROSS RECOVERY REPORT', { x: 602, y: y + 1, size: 10, font: bold, color: rgb(0.25, 0.18, 0.5) });
-    y -= 28;
+    page = pdf.addPage([PAGE.width, PAGE.height]);
+    y = drawReportHeader(page, { regular, bold }, logo, { title: 'ASH & DROSS RECOVERY REPORT', subtitle: 'Zinc recovery transactions | Quantities in kg | Values in Rs', margin: PAGE.margin });
     page.drawRectangle({ x: PAGE.margin, y: y - 18, width: PAGE.width - PAGE.margin * 2, height: 22, color: rgb(0.04, 0.12, 0.23) });
     columns.forEach(([title,,x]) => page.drawText(title, { x, y: y - 11, size: 7, font: bold, color: rgb(1, 1, 1) }));
     y -= 22;
   };
   addPage();
   rows.forEach((row, index) => {
-    if (y < 48) addPage();
+    if (y - 20 < 48) addPage();
     if (index % 2) page.drawRectangle({ x: PAGE.margin, y: y - 17, width: PAGE.width - PAGE.margin * 2, height: 20, color: rgb(0.95, 0.95, 0.98) });
     const values = { ...row,
       ash_weight_kg: kg(row.ash_weight_kg), ash_rate: money(row.ash_rate),
@@ -48,6 +48,7 @@ async function generateZincByproductPdf(rows) {
     y -= 20;
   });
   if (!rows.length) page.drawText('No ash or dross transactions recorded.', { x: PAGE.margin, y: y - 14, size: 10, font: regular });
+  drawReportFooters(pdf, { regular, bold }, 'Ash & dross recovery', PAGE.margin);
   return Buffer.from(await pdf.save());
 }
 module.exports = { generateZincByproductPdf };

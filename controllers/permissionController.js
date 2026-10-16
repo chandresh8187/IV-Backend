@@ -38,7 +38,7 @@ const updateUserPermissions = async (req, res) => {
   const seen = new Set();
   for (const item of overrides) {
     const key = String(item?.key || "").trim();
-    if (!getPermissionDefinition(key) || seen.has(key)) {
+    if (key.startsWith('unit1.') || !getPermissionDefinition(key) || seen.has(key)) {
       return res.status(400).json({ success: false, message: `Invalid or duplicate permission: ${key || "unknown"}` });
     }
     seen.add(key);
@@ -64,7 +64,7 @@ const updateUserPermissions = async (req, res) => {
       return res.status(400).json({ success: false, message: "Superadmin access is always enabled and cannot be overridden" });
     }
 
-    await connection.query("DELETE FROM user_permission_overrides WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM user_permission_overrides WHERE user_id = ? AND permission_key NOT LIKE 'unit1.%'", [userId]);
     const customOverrides = normalized.filter((item) => item.allowed !== null);
     if (customOverrides.length) {
       const placeholders = customOverrides.map(() => "(?, ?, ?)").join(", ");

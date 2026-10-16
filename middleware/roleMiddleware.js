@@ -27,6 +27,7 @@ const roleMiddleware = (allowedRoles = [], permissionKey = null) => {
             userId: req.user.id,
             role,
             permissionKey,
+            queryable: req.authDb,
           })
         : allowed.includes(role);
 

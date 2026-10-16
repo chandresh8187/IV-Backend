@@ -44,7 +44,17 @@ function normalizeMovement(body) {
     result.kgPerMm = ZINC_KG_PER_MM;
   } else {
     result.amountGrams = grams(body.amount_kg, 'Zinc amount');
-    if (body.action === 'receive') result.zincRatePerKg = rate(body.zinc_rate_per_kg);
+    if (body.action === 'receive') {
+      result.zincRatePerKg = rate(body.zinc_rate_per_kg);
+      for (const field of ['batch_number', 'invoice_number']) {
+        const value = body[field];
+        if (value != null && (typeof value !== 'string' || value.trim().length > 100 || /[\x00-\x1f\x7f]/.test(value))) {
+          throw fail(`${field === 'batch_number' ? 'Batch' : 'Invoice'} number must be 100 characters or fewer, without control characters.`);
+        }
+        // Optional for older clients and receipts where the reference is unavailable.
+        if (value?.trim()) result[field] = value.trim();
+      }
+    }
   }
   return result;
 }

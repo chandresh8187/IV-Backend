@@ -15,7 +15,7 @@ function validInvoiceDate(value) {
 }
 
 function validateBatchInward(body) {
-  for (const field of ['invoice', 'invoiceDate', 'tcNumber', 'vendorCode', 'materialType', 'grade']) {
+  for (const field of ['invoice', 'invoiceDate', 'vendorCode', 'materialType', 'grade']) {
     if (!text(body[field])) return { error: `${field} is required.` };
   }
   if ([body.invoice, body.tcNumber, body.vendorCode, body.grade].some(value => text(value).length > 100)) {
@@ -50,7 +50,7 @@ function validateBatchInward(body) {
     value: {
       internalId, supplier: text(body.vendorCode), supplierCoilId: internalId,
       invoice: text(body.invoice), invoiceDate: text(body.invoiceDate),
-      tcNumber: text(body.tcNumber), vendorCode: text(body.vendorCode),
+      tcNumber: text(body.tcNumber) || null, vendorCode: text(body.vendorCode),
       grade, materialType, coilQty,
       thicknessMm, widthMm, estimatedKg: totalWeightKg,
       grossKg: totalWeightKg, tareKg: 0, actualNetKg: totalWeightKg,
@@ -58,6 +58,20 @@ function validateBatchInward(body) {
       receivedAt: new Date().toISOString().slice(0, 23).replace('T', ' '),
     },
   };
+}
+
+function validateMultiBatchInward(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.lines) || body.lines.length < 1 || body.lines.length > 50) {
+    return { error: 'Add 1 to 50 coil lines for this invoice.' };
+  }
+  const coils = [];
+  for (const [index, line] of body.lines.entries()) {
+    if (!line || typeof line !== 'object' || Array.isArray(line)) return { error: `Line ${index + 1}: Enter coil details.` };
+    const result = validateBatchInward({ ...line, invoice: body.invoice, invoiceDate: body.invoiceDate, tcNumber: body.tcNumber, vendorCode: body.vendorCode });
+    if (result.error) return { error: `Line ${index + 1}: ${result.error}` };
+    coils.push(result.value);
+  }
+  return { value: coils };
 }
 
 function validateInward(body) {
@@ -107,4 +121,4 @@ function validateInward(body) {
   };
 }
 
-module.exports = { validateInward };
+module.exports = { validateInward, validateMultiBatchInward };

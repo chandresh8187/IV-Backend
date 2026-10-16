@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawReportHeader, drawReportFooters } = require('./reportBranding');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { DateTime } = require('luxon');
 const num = value => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
@@ -6,6 +7,7 @@ const stamp = value => { const d = parse(value); return d.isValid ? d.toFormat('
 
 async function generateGasManagementPdf({ summary = {}, receipts = [], runs = [] }) {
   const pdf = await PDFDocument.create();
+  const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica); const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const ink = rgb(.04,.12,.23); const muted = rgb(.36,.42,.5);
   let page; let y;
@@ -18,9 +20,8 @@ async function generateGasManagementPdf({ summary = {}, receipts = [], runs = []
   const columns = [['Date / time',38,120],['Transaction',162,315],['Bottle run time',485,77],['Production kg',566,83],['Amount Rs',653,80],['Recorded by',737,66]];
   function header() { page.drawRectangle({x:34,y:y-18,width:774,height:24,color:ink}); columns.forEach(c=>draw(c[0],c[1],y-10,8,bold,rgb(1,1,1))); y-=24; }
   function addPage(first = false) {
-    page=pdf.addPage([841.89,595.28]); y=558;
-    draw('IV SQUARE STRUCTURE INDIA PVT LTD',34,y,15,bold); draw('GAS STOCK REPORT',665,y,11,bold); y-=25;
-    draw(`Generated: ${DateTime.now().setZone('Asia/Kolkata').toFormat('dd LLL yyyy hh:mm a')} | IST | 1 bottle = 425 kg`,34,y,9,regular,muted); y-=22;
+    page=pdf.addPage([841.89,595.28]);
+    y=drawReportHeader(page,{regular,bold},logo,{title:'GAS STOCK REPORT',subtitle:`Generated ${DateTime.now().setZone('Asia/Kolkata').toFormat('dd LLL yyyy hh:mm a')} IST | 1 bottle = 425 kg`,margin:34});
     if(first) {
       page.drawRectangle({x:34,y:y-58,width:774,height:58,color:rgb(.95,.95,.98),borderColor:rgb(.84,.88,.93),borderWidth:1});
       draw('Current plant stock',46,y-17,10,bold);
@@ -42,13 +43,13 @@ async function generateGasManagementPdf({ summary = {}, receipts = [], runs = []
   events.forEach((event,index)=>{
     const values=[stamp(event.time),event.description,event.duration||'-',event.production==null?'-':num(event.production),event.amount==null?'-':num(event.amount),event.actor||'-'];
     const lines=values.map((value,i)=>wrap(value,columns[i][2])); const height=Math.max(34,...lines.map(l=>l.length*12+12));
-    if(y-height<40)addPage();
+    if(y-height<48)addPage();
     if(index%2)page.drawRectangle({x:34,y:y-height,width:774,height,color:rgb(.95,.95,.98)});
     lines.forEach((cell,i)=>cell.forEach((line,j)=>draw(line,columns[i][1],y-14-j*12,8)));
     y-=height;
   });
   if(!events.length)draw('No gas stock transactions recorded.',38,y-20,10);
-  pdf.getPages().forEach((p,i)=>p.drawText(`Gas Stock Report | Latest recorded transactions | Page ${i+1} of ${pdf.getPageCount()}`,{x:34,y:20,size:8,font:regular,color:muted}));
+  drawReportFooters(pdf,{regular,bold},'Gas stock | Latest recorded transactions',34);
   return Buffer.from(await pdf.save());
 }
 module.exports={generateGasManagementPdf};

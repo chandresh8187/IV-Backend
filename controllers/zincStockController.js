@@ -6,6 +6,7 @@ const { hasPermission } = require('../services/permissionService');
 const { getConfiguredCurrentFinancialYear } = require('../services/financialYearService');
 const { buildReport: buildExpenseReport } = require('./expenseReportController');
 const { checkStockAlerts, ZINC_LIMIT_KG } = require('../services/stockAlertService');
+const { zincMovementLedgerSql, buildZincMovementReport } = require('../services/zincMovementReportService');
 
 const readFinancialYearAverageRate = async (queryable = db) => {
   const year = await getConfiguredCurrentFinancialYear(queryable);
@@ -35,15 +36,17 @@ const readStock = async (queryable = db) => {
 
 const getZincStock = async (req, res) => {
   try {
-    const [stock, rate] = await Promise.all([
+    const [stock, rate, ledger] = await Promise.all([
       readStock(),
       readFinancialYearAverageRate(),
+      db.query(zincMovementLedgerSql),
     ]);
     return res.json({
       success: true,
       data: {
         ...stock,
         ...rate,
+        batch_balances: buildZincMovementReport(ledger[0]).batch_balances,
         low_stock: stock.initialized && Number(stock.plant_kg) <= ZINC_LIMIT_KG,
         stock_alert_threshold_kg: ZINC_LIMIT_KG,
       },
@@ -84,25 +87,16 @@ const getZincMovements = async (req, res) => {
     const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 200);
     const offset = (page - 1) * limit;
-    const [rows] = await db.query(`SELECT m.id, m.movement_type, m.amount_kg, m.zinc_rate_per_kg,
-      m.plant_after_kg, m.kettle_after_kg, m.note,
-      m.production_entry_id,
-      DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i:%s') AS created_at, u.name AS actor_name
-      FROM zinc_stock_movements m LEFT JOIN users u ON u.id = m.actor_user_id
-      ORDER BY m.id DESC LIMIT ? OFFSET ?`, [limit, offset]);
-    return res.json({ success: true, data: rows, pagination: { page, limit, has_more: rows.length === limit } });
+    const [ledger] = await db.query(zincMovementLedgerSql);
+    const rows = buildZincMovementReport(ledger).rows;
+    return res.json({ success: true, data: rows.slice(offset, offset + limit), pagination: { page, limit, has_more: rows.length > offset + limit } });
   } catch (error) { return sendError(res, error); }
 };
 
 const downloadZincMovementsPdf = async (req, res) => {
   try {
-    const [rows] = await db.query(`SELECT m.id, m.movement_type, m.amount_kg, m.zinc_rate_per_kg,
-      m.plant_after_kg, m.kettle_after_kg, m.note, m.production_entry_id,
-      DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-      u.name AS actor_name
-      FROM zinc_stock_movements m LEFT JOIN users u ON u.id = m.actor_user_id
-      ORDER BY m.id DESC`);
-    const pdf = await generateZincStockPdf(rows);
+    const [ledger] = await db.query(zincMovementLedgerSql);
+    const pdf = await generateZincStockPdf(buildZincMovementReport(ledger).rows);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', pdf.length);
     res.setHeader('Content-Disposition', 'inline; filename="zinc-stock-report.pdf"');
@@ -149,10 +143,11 @@ const saveZincMovement = async (req, res) => {
       kg_per_mm = ?, current_zinc_rate = ?, revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`,
     [next.plant_kg, next.kettle_kg, next.kg_per_mm, nextRate, next.revision]);
     await connection.query(`INSERT INTO zinc_stock_movements
-      (request_id, request_hash, movement_type, amount_kg, zinc_rate_per_kg, plant_after_kg, kettle_after_kg, note, actor_user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (request_id, request_hash, movement_type, amount_kg, zinc_rate_per_kg, plant_after_kg, kettle_after_kg, note, actor_user_id, batch_number, invoice_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [movement.request_id, hash, movement.action, (movement.amountGrams || 0) / 1000,
-      movement.zincRatePerKg || null, next.plant_kg, next.kettle_kg, movement.note, req.user.id]);
+      movement.zincRatePerKg || null, next.plant_kg, next.kettle_kg, movement.note, req.user.id,
+      movement.batch_number || null, movement.invoice_number || null]);
     await connection.commit();
     transaction = false;
     checkStockAlerts().catch(error => console.error('Stock alert check failed:', error));

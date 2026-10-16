@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawReportHeader, drawReportFooters } = require('./reportBranding');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 
 const PAGE = { width: 841.89, height: 595.28, margin: 42 };
@@ -12,6 +13,7 @@ const fit = (value, font, size, width) => {
 
 const generateProductionPlanningPdf = async ({ planning, items }) => {
   const pdf = await PDFDocument.create();
+  const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const width = PAGE.width - PAGE.margin * 2;
@@ -20,7 +22,7 @@ const generateProductionPlanningPdf = async ({ planning, items }) => {
   const label = (value, x, baseline, color = C.muted) => text(value, x, baseline, 8, bold, color);
   const addPage = () => {
     page = pdf.addPage([PAGE.width, PAGE.height]);
-    y = PAGE.height - PAGE.margin - 44;
+    y = drawReportHeader(page, { regular, bold }, logo, { title: 'PRODUCTION PLANNING REPORT', subtitle: `Planning flow ${planning.id || '-'} | Challan progress`, margin: PAGE.margin });
   };
   const stat = (x, top, statWidth, title, value, color) => {
     page.drawRectangle({ x, y: top - 43, width: statWidth, height: 43, color: C.soft, borderColor: C.line, borderWidth: .7 });
@@ -79,15 +81,7 @@ const generateProductionPlanningPdf = async ({ planning, items }) => {
     y -= height + 13;
   });
 
-  const pages = pdf.getPages();
-  pages.forEach((current, index) => {
-    current.drawText('IV SQUARE STRUCTURE INDIA PVT LTD', { x: PAGE.margin, y: PAGE.height - PAGE.margin, size: 15, font: bold, color: C.navy });
-    current.drawText('PRODUCTION PLANNING REPORT', { x: PAGE.width - PAGE.margin - 220, y: PAGE.height - PAGE.margin + 1, size: 11, font: bold, color: C.blue });
-    current.drawLine({ start: { x: PAGE.margin, y: PAGE.height - PAGE.margin - 20 }, end: { x: PAGE.width - PAGE.margin, y: PAGE.height - PAGE.margin - 20 }, thickness: 2, color: C.blue });
-    current.drawLine({ start: { x: PAGE.margin, y: 44 }, end: { x: PAGE.width - PAGE.margin, y: 44 }, thickness: .7, color: C.line });
-    current.drawText(`Generated ${new Date().toLocaleString('en-IN')}`, { x: PAGE.margin, y: 30, size: 7.5, font: regular, color: C.muted });
-    current.drawText(`Page ${index + 1} of ${pages.length}`, { x: PAGE.width - PAGE.margin - 58, y: 30, size: 7.5, font: regular, color: C.muted });
-  });
+  drawReportFooters(pdf, { regular, bold }, `Production planning | Flow ${planning.id || '-'}`, PAGE.margin);
   return Buffer.from(await pdf.save());
 };
 

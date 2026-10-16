@@ -4,6 +4,7 @@ const { getSetting } = require("../services/appSettingsService");
 const ALWAYS_AVAILABLE = [
   /^\/app-update\/android\/?$/,
   /^\/auth\//,
+  /^\/unit1\/auth\//,
   /^\/settings\/?/,
 ];
 
@@ -15,7 +16,7 @@ const readRole = (req) => {
     return String(
       jwt.verify(token, process.env.JWT_SECRET, {
         issuer: "iv-api",
-        audience: "iv-app",
+        audience: ['iv-app', 'iv-unit1'],
         ignoreExpiration: true,
       })?.role || "",
     )

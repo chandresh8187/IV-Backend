@@ -49,6 +49,15 @@ const applyProductionZinc = async (connection, {
     );
   }
   const revision = Number(stock.revision) + 1;
+  // Retain operating context for older movements before a linked entry can be
+  // deleted. This updates metadata only, never ledger amounts or balances.
+  await connection.query(
+    `UPDATE zinc_stock_movements m JOIN production_entries p ON p.id = m.production_entry_id
+     SET m.shift_date = COALESCE(m.shift_date, p.shift_date),
+         m.shift_name = COALESCE(m.shift_name, p.shift_name)
+     WHERE p.id = ? AND (m.shift_date IS NULL OR m.shift_name IS NULL)`,
+    [entryId],
+  );
   await connection.query(
     `UPDATE zinc_stock SET kettle_kg = ?, kg_per_mm = ?, revision = ?,
        updated_at = CURRENT_TIMESTAMP WHERE id = 1`,
@@ -58,8 +67,10 @@ const applyProductionZinc = async (connection, {
   await connection.query(
     `INSERT INTO zinc_stock_movements
       (request_id, request_hash, movement_type, amount_kg, plant_after_kg,
-       kettle_after_kg, note, actor_user_id, production_entry_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       kettle_after_kg, note, actor_user_id, shift_date, shift_name, production_entry_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+       (SELECT shift_date FROM production_entries WHERE id = ?),
+       (SELECT shift_name FROM production_entries WHERE id = ?), ?)`,
     [
       `production_${entryId}_${crypto.randomUUID()}`,
       crypto.createHash('sha256').update(`${entryId}:${previous}:${next}:${revision}`).digest('hex'),
@@ -69,6 +80,8 @@ const applyProductionZinc = async (connection, {
       kettleAfter,
       `Production SR ${srNo}`,
       actorUserId,
+      entryId,
+      entryId,
       entryId,
     ],
   );

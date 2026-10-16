@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawCompanyIdentity } = require('./reportBranding');
 const { Buffer } = require("buffer");
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const { readPdfAsset } = require("./pdfAssets");
@@ -136,67 +137,16 @@ const embedPngAsset = async (pdfDoc, filename) => {
 };
 
 const loadStampImage = pdfDoc => embedPngAsset(pdfDoc, "stamp.png");
-const loadLogoImage = pdfDoc => embedPngAsset(pdfDoc, "IV_logo.png");
+const loadLogoImage = loadCompanyLogo;
 
 /* -------------------------------------------------------------------------- */
 /* HEADER - white letterhead like the Excel sample: company block on the     */
 /* left, logo on the right, centered certificate title below                 */
 /* -------------------------------------------------------------------------- */
-const COMPANY_ADDRESS_LINES = [
-  'PLANT-4, PLOT NO. 2526, NEAR MASCUT POLYMER, NEAR RADHE FORGE,',
-  'VERAVAL-SHAPAR RAJKOT - 360024 (Guj) INDIA.',
-];
-
 const drawHeader = (page, fonts, logoImage) => {
   const topY = PAGE.height - PAGE.margin;
 
-  // Left: company name + address
-  drawText(page, 'IV SQUARE STRUCTURE INDIA PVT LTD', PAGE.margin, topY - 30, {
-    size: 15,
-    font: fonts.bold,
-    color: COLORS.navy,
-  });
-
-  COMPANY_ADDRESS_LINES.forEach((line, index) => {
-    drawText(page, line, PAGE.margin, topY - 42 - index * 9, {
-      size: 7,
-      font: fonts.regular,
-      color: COLORS.textMuted,
-    });
-  });
-
-  // Right: logo image, or "IV" monogram fallback
-  const logoBoxW = 140;
-  const logoBoxH = 60;
-  const logoX = PAGE.width - PAGE.margin - logoBoxW;
-  const logoY = topY - logoBoxH - 2;
-
-  if (logoImage) {
-    // Scale to fit the logo box while keeping the image's aspect ratio.
-    const scale = Math.min(
-      logoBoxW / logoImage.width,
-      logoBoxH / logoImage.height,
-    );
-    const w = logoImage.width * scale;
-    const h = logoImage.height * scale;
-    page.drawImage(logoImage, {
-      x: logoX + (logoBoxW - w) / 2,
-      y: logoY + (logoBoxH - h) / 2,
-      width: w,
-      height: h,
-    });
-  } else {
-    drawRect(page, logoX + logoBoxW - 48, logoY + 12, 44, 44, {
-      bg: COLORS.steel,
-      borderColor: COLORS.amber,
-      borderWidth: 1.2,
-    });
-    drawCenteredText(page, 'IV', logoX + logoBoxW - 48, logoY + 12, 44, 44, {
-      font: fonts.bold,
-      size: 20,
-      color: COLORS.white,
-    });
-  }
+  drawCompanyIdentity(page, fonts, logoImage, PAGE.margin);
 
   // Centered certificate title
   const titleY = topY - 86;
@@ -900,7 +850,7 @@ const generateCoatingCertificatePdf = async ({
       drawFooter(page, fonts, pageNumber, stampImage);
       pageNumber += 1;
       page = pdfDoc.addPage(A4_PORTRAIT);
-      y = drawReadingsTableHeader(page, fonts, PAGE.height - 50);
+      y = drawReadingsTableHeader(page, fonts, drawHeader(page, fonts, logoImage));
     }
 
     y -= rowHeight;
@@ -923,7 +873,7 @@ const generateCoatingCertificatePdf = async ({
     drawFooter(page, fonts, pageNumber, stampImage);
     pageNumber += 1;
     page = pdfDoc.addPage(A4_PORTRAIT);
-    y = PAGE.height - 50;
+    y = drawHeader(page, fonts, logoImage);
   }
 
   y = drawRequirementNote(page, fonts, y);

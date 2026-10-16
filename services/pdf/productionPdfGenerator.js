@@ -1,6 +1,6 @@
 const { Buffer } = require("buffer");
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
-const { readPdfAsset } = require("./pdfAssets");
+const { loadCompanyLogo, drawCompanyIdentity } = require("./reportBranding");
 
 const PAGE = {
   width: 841.89,
@@ -176,16 +176,7 @@ const drawRoundedBox = (page, x, y, width, height, options = {}) => {
 /* Falls back to an "IV" monogram block if the file isn't found, so a        */
 /* missing logo never breaks report generation.                             */
 /* -------------------------------------------------------------------------- */
-const loadLogoImage = async pdfDoc => {
-  const imageBytes = readPdfAsset("IV_logo.png");
-  if (!imageBytes) return null;
-
-  try {
-    return await pdfDoc.embedPng(imageBytes);
-  } catch (error) {
-    return null;
-  }
-};
+const loadLogoImage = loadCompanyLogo;
 
 /* -------------------------------------------------------------------------- */
 /* REPORT ID                                                                 */
@@ -204,11 +195,6 @@ const buildReportNo = (date, shiftName) => {
 /* -------------------------------------------------------------------------- */
 /* HEADER - same letterhead proportions and typography as the certificate.  */
 /* -------------------------------------------------------------------------- */
-const COMPANY_ADDRESS_LINES = [
-  'PLANT-4, PLOT NO. 2526, NEAR MASCUT POLYMER, NEAR RADHE FORGE,',
-  'VERAVAL-SHAPAR RAJKOT - 360024 (Guj) INDIA.',
-];
-
 const drawHeader = ({
   page,
   fonts,
@@ -219,49 +205,7 @@ const drawHeader = ({
 }) => {
   const topY = PAGE.height - PAGE.margin;
 
-  drawText(page, 'IV SQUARE STRUCTURE INDIA PVT LTD', PAGE.margin, topY - 30, {
-    size: 15,
-    font: fonts.bold,
-    color: COLORS.navy,
-  });
-  COMPANY_ADDRESS_LINES.forEach((line, index) => {
-    drawText(page, line, PAGE.margin, topY - 42 - index * 9, {
-      size: 7,
-      font: fonts.regular,
-      color: COLORS.textMuted,
-    });
-  });
-
-  const logoBoxW = 140;
-  const logoBoxH = 60;
-  const logoX = PAGE.width - PAGE.margin - logoBoxW;
-  const logoY = topY - logoBoxH - 2;
-
-  if (logoImage) {
-    const scale = Math.min(
-      logoBoxW / logoImage.width,
-      logoBoxH / logoImage.height,
-    );
-    const width = logoImage.width * scale;
-    const height = logoImage.height * scale;
-    page.drawImage(logoImage, {
-      x: logoX + (logoBoxW - width) / 2,
-      y: logoY + (logoBoxH - height) / 2,
-      width,
-      height,
-    });
-  } else {
-    drawRoundedBox(page, logoX + logoBoxW - 48, logoY + 12, 44, 44, {
-      bg: COLORS.steel,
-      borderColor: COLORS.amber,
-      borderWidth: 1.2,
-    });
-    drawCenteredText(page, 'IV', logoX + logoBoxW - 48, logoY + 12, 44, 44, {
-      font: fonts.bold,
-      size: 20,
-      color: COLORS.white,
-    });
-  }
+  drawCompanyIdentity(page, fonts, logoImage, PAGE.margin);
 
   const titleY = topY - 86;
   drawCenteredText(
@@ -350,8 +294,10 @@ const drawContinuationBar = ({
   reportType,
   pageNumber,
   tableWidth,
+  logoImage,
 }) => {
-  const topY = PAGE.height - PAGE.margin;
+  drawCompanyIdentity(page, fonts, logoImage, PAGE.margin);
+  const topY = PAGE.height - PAGE.margin - 76;
 
   drawRoundedBox(page, PAGE.margin, topY - 22, tableWidth, 22, {
     bg: COLORS.bgPanel,
@@ -727,6 +673,7 @@ const generateProductionPdf = async ({
         reportType,
         pageNumber,
         tableWidth,
+        logoImage,
       });
       drawTableHeader(page, fonts, y, columns);
       y -= TABLE_HEADER_HEIGHT;

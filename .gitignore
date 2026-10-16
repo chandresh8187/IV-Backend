@@ -3,3 +3,4 @@ node_modules
 .env.development
 uploads/
 firebase-ser.json
+firebase-unit1*.json

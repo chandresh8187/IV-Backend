@@ -92,6 +92,7 @@ app.get("/health", async (req, res) => {
 });
 
 app.use("/api/auth/login", loginLimiter);
+app.use('/api/unit1/auth/login', loginLimiter);
 app.use("/api", maintenanceModeMiddleware);
 
 app.get("/api", (req, res) => {
@@ -116,16 +117,18 @@ io.use((socket, next) => {
   if (!token) return next();
 
   try {
-    socket.user = jwt.verify(token, process.env.JWT_SECRET, {
-      issuer: "iv-api",
-      audience: "iv-app",
-      ignoreExpiration: true,
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      issuer: 'iv-api', audience: ['iv-app', 'iv-unit1'], ignoreExpiration: true,
     });
+    if ((decoded.aud === 'iv-unit1') !== (decoded.scope === 'unit1')) throw new Error('Invalid scope');
+    if (decoded.scope === 'unit1') jwt.verify(token, process.env.JWT_SECRET, { issuer: 'iv-api', audience: 'iv-unit1' });
+    socket.user = decoded;
   } catch {
     return next(new Error("Invalid socket authentication"));
   }
 
-  db.query(
+  const authDb = socket.user.scope === 'unit1' ? unit1Db : db;
+  authDb.query(
     "SELECT id, role FROM users WHERE id = ? AND status = 'active' LIMIT 1",
     [socket.user.id],
   )
@@ -139,7 +142,11 @@ io.use((socket, next) => {
 
 io.on("connection", async (socket) => {
   if (socket.user?.id) {
-    socket.join(`user:${socket.user.id}`);
+    const isUnit1 = socket.user.scope === 'unit1';
+    if (!isUnit1) socket.join(`user:${socket.user.id}`);
+    const productionAllowed = isUnit1 && await hasPermission({ userId: socket.user.id, role: socket.user.role, permissionKey: 'unit1.production.view', queryable: unit1Db }).catch(() => false);
+    if (productionAllowed) socket.join('unit1:production');
+    if (isUnit1) return socket.emit('socket_connected', { success: true, user_id: socket.user.id });
     const chatAllowed = await hasPermission({ userId: socket.user.id, role: socket.user.role, permissionKey: 'chat.view' }).catch(() => false);
     if (chatAllowed) {
       socket.join('chat');
@@ -169,8 +176,15 @@ io.on("connection", async (socket) => {
 });
 
 app.use("/api/auth", require("./routes/authRoutes"));
+app.use('/api/unit1/auth', require('./routes/unit1AuthRoutes'));
+app.use('/api/unit1/users', require('./routes/unit1UserRoutes'));
+app.use('/api/unit1/notifications', require('./routes/unit1NotificationRoutes'));
 app.use("/api/unit1/coils", require("./routes/unit1CoilRoutes"));
 app.use("/api/unit1/materials-grades", require("./routes/unit1MaterialGradeRoutes"));
+app.use("/api/unit1/qr-settings", require("./routes/unit1QrSettingsRoutes"));
+app.use("/api/unit1/machines", require("./routes/unit1MachineRoutes"));
+app.use("/api/unit1/shifts", require("./routes/unit1ShiftRoutes"));
+app.use("/api/unit1/production", require("./routes/unit1ProductionRoutes"));
 app.use("/api/productions", require("./routes/productionRoutes"));
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/shifts", require("./routes/shiftRoutes"));
@@ -216,6 +230,10 @@ app.use((error, req, res, next) => {
 
   if (error.message === "Origin is not allowed by CORS") {
     return res.status(403).json({ success: false, message: error.message });
+  }
+
+  if (Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+    return res.status(error.status).json({ success: false, error: error.message });
   }
 
   console.error("Unhandled request error:", error);

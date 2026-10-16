@@ -20,25 +20,11 @@ const calculateZinc = (totalMs, totalGi) => {
 
 const getSummary = async (where, params) => {
   const [rows] = await db.query(
-    `
-    SELECT
-      ROUND(COALESCE(SUM(ms_material_weight), 0), 4)
-        AS total_ms_production_kg,
-      ROUND(COALESCE(SUM(gi_material_weight), 0), 4)
-        AS total_gi_production_kg
-    FROM (
-      SELECT
-        pe.material,
-        AVG(NULLIF(pe.ms_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-          AS ms_material_weight,
-        AVG(NULLIF(pe.gi_weight, 0)) * COALESCE(SUM(pe.dipping_qty), 0)
-          AS gi_material_weight
-      FROM production_entries pe
-      WHERE ${where}
-        AND COALESCE(pe.row_type, 'entry') = 'entry'
-      GROUP BY pe.material
-    ) AS material_total
-    `,
+    `SELECT
+      ROUND(COALESCE(SUM(COALESCE(pe.ms_weight, 0) * COALESCE(pe.dipping_qty, 0)), 0), 4) AS total_ms_production_kg,
+      ROUND(COALESCE(SUM(COALESCE(pe.gi_weight, 0) * COALESCE(pe.dipping_qty, 0)), 0), 4) AS total_gi_production_kg
+     FROM production_entries pe
+     WHERE ${where} AND COALESCE(pe.row_type, 'entry') = 'entry'`,
     params,
   );
 
@@ -56,8 +42,8 @@ const getSummary = async (where, params) => {
 const getReportFilter = ({ type, value, date, planningId, planningItemId, itemId, shiftName }) => {
   if (type === "material") {
     const materialWhere = itemId
-      ? "pe.shift_date = ? AND pe.item_id = ?"
-      : "pe.shift_date = ? AND LOWER(pe.material) = LOWER(?)";
+      ? "pe.shift_date = ? AND COALESCE(pe.item_id, (SELECT item_id FROM production_planning_items WHERE id = pe.planning_item_id)) = ?"
+      : "pe.shift_date = ? AND LOWER(COALESCE(NULLIF(TRIM(pe.material), ''), (SELECT NULLIF(TRIM(material_description), '') FROM production_planning_items WHERE id = pe.planning_item_id), 'Unassigned material')) = LOWER(?)";
     const materialParams = itemId ? [date, itemId] : [date, value];
     return {
       where: shiftName ? `${materialWhere} AND LOWER(pe.shift_name) = ?` : materialWhere,
@@ -76,13 +62,15 @@ const getReportFilter = ({ type, value, date, planningId, planningItemId, itemId
     };
   }
 
+  const where = planningItemId
+    ? "(pe.planning_item_id = ? OR (pe.planning_item_id IS NULL AND pe.planning_id = ? AND (pe.challan_no = ? OR (SELECT COUNT(*) FROM production_planning_items WHERE planning_id = ?) = 1)))"
+    : planningId ? "pe.planning_id = ?" : "pe.challan_no = ?";
+  const params = planningItemId ? [planningItemId, planningId, value, planningId] : [planningId || value];
   return {
-    where: planningItemId
-      ? "(pe.planning_item_id = ? OR (pe.planning_item_id IS NULL AND pe.planning_id = ? AND (pe.challan_no = ? OR (SELECT COUNT(*) FROM production_planning_items WHERE planning_id = ?) = 1)))"
-      : planningId ? "pe.planning_id = ?" : "pe.challan_no = ?",
-    params: planningItemId ? [planningItemId, planningId, value, planningId] : [planningId || value],
-    reportDate: null,
-    shiftName: `Challan ${value}`,
+    where: `${where}${date ? ' AND pe.shift_date = ?' : ''}${shiftName ? ' AND LOWER(pe.shift_name) = ?' : ''}`,
+    params: [...params, ...(date ? [date] : []), ...(shiftName ? [shiftName] : [])],
+    reportDate: date || null,
+    shiftName: `Challan ${value}${shiftName ? ` ${shiftName} shift` : ''}`,
   };
 };
 
@@ -103,7 +91,7 @@ const generateProductionReport = async (req, res) => {
       });
     }
     if (
-      ["material", "shift"].includes(type) &&
+      (["material", "shift"].includes(type) || date) &&
       !/^\d{4}-\d{2}-\d{2}$/.test(date)
     ) {
       return res.status(400).json({
@@ -130,6 +118,15 @@ const generateProductionReport = async (req, res) => {
         success: false,
         message: "planning_id must be a positive whole number",
       });
+    }
+
+    for (const key of ['item_id', 'planning_id', 'planning_item_id']) {
+      if (req.query[key] != null && (!Number.isSafeInteger(Number(req.query[key])) || Number(req.query[key]) < 1)) {
+        return res.status(400).json({ success: false, message: `${key} must be a positive whole number` });
+      }
+    }
+    if (planningItemId && !planningId) {
+      return res.status(400).json({ success: false, message: 'planning_id is required with planning_item_id' });
     }
 
     const filter = getReportFilter({ type, value, date, planningId, planningItemId, itemId, shiftName });

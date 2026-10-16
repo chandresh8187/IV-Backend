@@ -166,7 +166,7 @@ const getHistoryMaterialSummary = async (req, res) => {
     const [rows] = await db.query(
       `SELECT
          COALESCE(pe.item_id, ppi.item_id) AS item_id,
-         COALESCE(i.item_name, NULLIF(pe.material, ''), 'Unassigned material') AS material_name,
+         COALESCE(NULLIF(TRIM(i.item_name), ''), NULLIF(TRIM(pe.material), ''), NULLIF(TRIM(ppi.material_description), ''), 'Unassigned material') AS material_name,
          GROUP_CONCAT(DISTINCT NULLIF(COALESCE(ppi.material_description, pe.material), '')
            ORDER BY COALESCE(ppi.material_description, pe.material) SEPARATOR ' | ')
            AS material_descriptions,
@@ -189,7 +189,7 @@ const getHistoryMaterialSummary = async (req, res) => {
        WHERE pe.shift_date = ?${shiftFilter} AND COALESCE(pe.row_type, 'entry') = 'entry'
        GROUP BY
          COALESCE(pe.item_id, ppi.item_id),
-         COALESCE(i.item_name, NULLIF(pe.material, ''), 'Unassigned material')
+         COALESCE(NULLIF(TRIM(i.item_name), ''), NULLIF(TRIM(pe.material), ''), NULLIF(TRIM(ppi.material_description), ''), 'Unassigned material')
        ORDER BY material_name ASC`,
       shiftName ? [date, shiftName] : [date],
     );
@@ -289,7 +289,7 @@ const getHistoryPartySummary = async (req, res) => {
       return res.status(400).json({ success: false, message: 'A valid date and optional day or night shift are required' });
     }
     const party = "COALESCE(NULLIF(TRIM(ppi.party_name), ''), NULLIF(TRIM(pp.party_name), ''), NULLIF(TRIM(pe.party_name), ''), 'Unassigned party')";
-    const material = "COALESCE(i.item_name, NULLIF(pe.material, ''), 'Unassigned material')";
+    const material = "COALESCE(NULLIF(TRIM(i.item_name), ''), NULLIF(TRIM(pe.material), ''), NULLIF(TRIM(ppi.material_description), ''), 'Unassigned material')";
     const [rows] = await db.query(`SELECT
       ${party} AS party_name,
       COALESCE(pe.item_id, ppi.item_id) AS item_id,

@@ -1,3 +1,4 @@
+const { loadCompanyLogo, drawReportHeader, drawReportFooters } = require('./reportBranding');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { DateTime } = require('luxon');
 
@@ -8,16 +9,14 @@ const clean = value => String(value ?? '-').normalize('NFKD').replace(/[^\x20-\x
 
 const generateDailyProductionPdf = async report => {
   const pdf = await PDFDocument.create();
+  const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   let page, y;
   const draw = (value, x, baseline, size = 8, font = regular, color = C.text) => page.drawText(clean(value), { x, y: baseline, size, font, color });
   const pageStart = () => {
     page = pdf.addPage([PAGE.width, PAGE.height]);
-    page.drawText('IV SQUARE STRUCTURE INDIA PVT LTD', { x: PAGE.left, y: 553, size: 14, font: bold, color: C.navy });
-    page.drawText('DAILY PRODUCTION REPORT', { x: 631, y: 555, size: 10, font: bold, color: C.blue });
-    page.drawLine({ start: { x: PAGE.left, y: 540 }, end: { x: PAGE.width - PAGE.right, y: 540 }, thickness: 1.5, color: C.blue });
-    y = 508;
+    y = drawReportHeader(page, { regular, bold }, logo, { title: 'DAILY PRODUCTION REPORT', subtitle: `${report.period.label} | ${report.period.from} to ${report.period.to}`, margin: PAGE.left });
   };
   const ensure = height => { if (y - height < 58) pageStart(); };
   const heading = title => {
@@ -82,11 +81,7 @@ const generateDailyProductionPdf = async report => {
     if (y - 17 < 58) { pageStart(); heading('CONTRACTOR PRODUCTION (CONTINUED)'); tableHeader(contractorColumns); }
     tableRow(contractorColumns, [contractor.contractor_name, `${fmt(contractor.ms_kg)} kg`], index);
   });
-  pdf.getPages().forEach((current, index, pages) => {
-    current.drawLine({ start: { x: PAGE.left, y: 44 }, end: { x: PAGE.width - PAGE.right, y: 44 }, thickness: .6, color: C.line });
-    current.drawText(`Month: ${clean(report.period.label)}  |  Generated ${new Date().toLocaleString('en-IN')}`, { x: PAGE.left, y: 28, size: 7, font: regular, color: C.muted });
-    current.drawText(`Page ${index + 1} of ${pages.length}`, { x: 750, y: 28, size: 7, font: regular, color: C.muted });
-  });
+  drawReportFooters(pdf, { regular, bold }, `Daily production | ${report.period.label}`, PAGE.left);
   return Buffer.from(await pdf.save());
 };
 

@@ -520,6 +520,12 @@ CREATE TABLE IF NOT EXISTS `coating_certificates` (
   `challan_no` VARCHAR(100) NOT NULL,
   `party_name` VARCHAR(255) NOT NULL,
   `third_party_name` VARCHAR(255) NULL,
+  `client_name` VARCHAR(255) NULL,
+  `client_address` TEXT NULL,
+  `invoice_no` VARCHAR(100) NULL,
+  `material_description` TEXT NULL,
+  `minimum_coating` DECIMAL(8,2) NULL,
+  `maximum_coating` DECIMAL(8,2) NULL,
   `structure` VARCHAR(255) NULL,
   `quantity` VARCHAR(100) NULL,
   `inspection_date` DATE NOT NULL,
@@ -539,6 +545,7 @@ CREATE TABLE IF NOT EXISTS `coating_certificates` (
   `remarks` TEXT NULL,
   `created_by` INT NOT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `deleted_at` DATETIME NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_certificate_tc_no` (`tc_no`),
   KEY `idx_certificate_planning` (`planning_id`),
@@ -562,6 +569,10 @@ CREATE TABLE IF NOT EXISTS `zinc_stock` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `zinc_stock_movements` (
+  `batch_number` VARCHAR(100) NULL,
+  `invoice_number` VARCHAR(100) NULL,
+  `shift_date` DATE NULL,
+  `shift_name` VARCHAR(20) NULL,
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `request_id` VARCHAR(100) NOT NULL,
   `request_hash` CHAR(64) NOT NULL,
@@ -879,4 +890,8 @@ INSERT IGNORE INTO `schema_migrations` (`filename`,`checksum`,`execution_ms`) VA
 ('20260929000600_add_labour_timer_limits.sql','87be1d9ae6b54fb84b6bcb6ae5a0714d58a636d7462c831600f605bb1552c2aa',0),
 ('20260929000700_add_production_zinc_kettle_duration.sql','d1a6dfe6c56c85d7f99a9cf950a85a115df11baca6a35a6e47f944845dde1ddd',0),
 ('20260929000800_create_stock_alert_state.sql','04da6ab5f170309e08c060ac1fea41e38b3b253a0777529ab86426dc4e33c333',0),
-('20261001000100_add_gas_run_end_reason.sql','4d245ffc7de608f6f4491a73fa5996278d57251e3e31d01fa80e74c5d057b99a',0);
+('20261001000100_add_gas_run_end_reason.sql','4d245ffc7de608f6f4491a73fa5996278d57251e3e31d01fa80e74c5d057b99a',0),
+('20261010000100_add_certificate_details.sql','d2a19651710774583d70cdfc36d7d7e046c427372efd6b0cf5d82b544f57111a',0),
+('20261010000200_soft_delete_certificates.sql','c5eefdb70aa544fa93ffb821c7f189438baa3ced47bb906dea838dcef3d3d200',0),
+('20261016000100_add_zinc_receipt_references.sql','2b92bce750832aac422f16b85eab2d37b20e4e9c028e0c9e1d95aed599011cfe',0),
+('20261016000200_preserve_zinc_movement_shift.sql','4f1075ca3bb41286748cbab3c99d3ae64342b693e8a4e309f5a1439b44e6592a',0);

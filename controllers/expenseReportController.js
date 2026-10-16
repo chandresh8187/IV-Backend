@@ -11,9 +11,20 @@ const monthBounds = value => {
   return { month, from: start.toISODate(), to: start.endOf('month').toISODate() };
 };
 
+const readCurrentGasRate = async (queryable = db) => {
+  const [rows] = await queryable.query(
+    'SELECT price_per_bottle, kg_per_bottle FROM gas_bottle_receipts ORDER BY id DESC LIMIT 1',
+  );
+  const receipt = rows[0];
+  return receipt ? Number((Number(receipt.price_per_bottle) / Number(receipt.kg_per_bottle)).toFixed(2)) : 0;
+};
+
 const readSettings = async () => {
-  const [rows] = await db.query('SELECT * FROM expense_settings WHERE id = 1');
-  return normalizeExpenseSettings(rows[0]);
+  const [[rows], gasRate] = await Promise.all([
+    db.query('SELECT * FROM expense_settings WHERE id = 1'),
+    readCurrentGasRate(),
+  ]);
+  return normalizeExpenseSettings({ ...rows[0], gas_bottle_rate: gasRate });
 };
 
 const buildReport = async monthValue => {
@@ -61,7 +72,8 @@ const getExpenseSettings = async (req, res) => {
 const saveExpenseSettings = async (req, res) => {
   let connection;
   try {
-    const settings = validateExpenseSettings(req.body || {});
+    const gasRate = await readCurrentGasRate();
+    const settings = validateExpenseSettings({ ...req.body, gas_bottle_rate: gasRate });
     const columns = SETTING_FIELDS.join(', ');
     const placeholders = SETTING_FIELDS.map(() => '?').join(', ');
     const updates = SETTING_FIELDS.map(field => `${field} = VALUES(${field})`).join(', ');

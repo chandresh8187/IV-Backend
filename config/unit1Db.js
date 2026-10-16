@@ -9,7 +9,13 @@ const unit1Db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   decimalNumbers: true,
-  timezone: 'Z',
+  timezone: '+05:30',
+});
+
+unit1Db.on('connection', connection => {
+  connection.query("SET time_zone = '+05:30'", error => {
+    if (error) console.error('Could not set Unit 1 MySQL session timezone:', error);
+  });
 });
 
 module.exports = unit1Db;

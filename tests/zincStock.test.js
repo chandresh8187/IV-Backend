@@ -103,7 +103,7 @@ function controllerFixture({ failLedger = false } = {}) {
     }
     if (sql.includes('INSERT INTO zinc_stock_movements')) {
       if (failLedger) throw Object.assign(new Error('Ledger unavailable'), { status: 503 });
-      staged.push({ request_id: params[0], request_hash: params[1], zinc_rate_per_kg: params[4] }); return [{}];
+      staged.push({ request_id: params[0], request_hash: params[1], zinc_rate_per_kg: params[4], batch_number: params[9], invoice_number: params[10] }); return [{}];
     }
     throw new Error('Unexpected query');
   };
@@ -162,4 +162,15 @@ test('receiving zinc saves its purchase rate on stock and the receipt ledger', a
   assert.equal(f.getStock().kettle_kg, 0);
   assert.equal(f.getStock().current_zinc_rate, 242.75);
   assert.equal(f.getLedger()[0].zinc_rate_per_kg, 242.75);
+});
+
+
+test('receipt references persist and a retry with changed references is rejected', async () => {
+  const f = controllerFixture();
+  const data = body({ action: 'receive', amount_kg: 50, zinc_rate_per_kg: 200, batch_number: 'B-12', invoice_number: 'INV/44' });
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getLedger()[0].batch_number, 'B-12');
+  assert.equal(f.getLedger()[0].invoice_number, 'INV/44');
+  assert.equal((await f.run({ ...data, invoice_number: 'INV/45' })).code, 409);
+  assert.equal(f.getStock().plant_kg, 10039);
 });
