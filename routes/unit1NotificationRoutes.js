@@ -39,13 +39,32 @@ router.get('/status', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Only expose device metadata for the authenticated Unit 1 account, never FCM tokens.
+router.get('/devices', async (req, res, next) => {
+  try {
+    const [devices] = await db.execute("SELECT id, installation_id AS installationId, updated_at AS updatedAt FROM unit1_fcm_tokens WHERE user_id=? AND device_type='android' ORDER BY updated_at DESC LIMIT 100", [req.user.id]);
+    res.json({ data: { devices, senderConfigured: firebase.configured() } });
+  } catch (error) { next(error); }
+});
+
 router.post('/test', async (req, res, next) => {
   try {
-    const [rows] = await db.execute('SELECT fcm_token AS token FROM unit1_fcm_tokens WHERE user_id=? ORDER BY updated_at DESC LIMIT 10', [req.user.id]);
-    if (!rows.length) return res.status(409).json({ error: 'Enable notifications on this device first.' });
+    const { deviceType, deviceId } = req.body || {};
+    if (deviceType !== undefined && !['android', 'ios'].includes(deviceType)) return res.status(400).json({ error: 'Invalid device type.' });
+    if (deviceId !== undefined && (!Number.isSafeInteger(deviceId) || deviceId < 1 || deviceType !== 'android')) return res.status(400).json({ error: 'Select a valid Android device.' });
+    const title = req.body?.title === undefined ? 'Unit 1 notifications ready' : req.body.title;
+    const body = req.body?.body === undefined ? 'Firebase Cloud Messaging is connected to your Unit 1 account.' : req.body.body;
+    if (typeof title !== 'string' || !title.trim() || title.length > 100 || typeof body !== 'string' || !body.trim() || body.length > 500) return res.status(400).json({ error: 'Enter a title (up to 100 characters) and message (up to 500 characters).' });
+    const params = [req.user.id];
+    let where = 'user_id=?';
+    if (deviceType) { where += ' AND device_type=?'; params.push(deviceType); }
+    if (deviceId !== undefined) { where += ' AND id=?'; params.push(deviceId); }
+    const [rows] = await db.execute(`SELECT fcm_token AS token FROM unit1_fcm_tokens WHERE ${where} ORDER BY updated_at DESC LIMIT ${deviceType === 'android' ? 100 : 10}`, params);
+    if (!rows.length) return res.status(409).json({ error: 'No matching registered devices. Sign into the Unit 1 Android app with this account and allow notifications first.' });
+    if (!firebase.configured()) return res.status(503).json({ error: 'The Unit 1 notification sender is not configured on the backend.' });
     const response = await firebase.messaging().sendEachForMulticast({
       tokens: rows.map(row => row.token),
-      notification: { title: 'Unit 1 notifications ready', body: 'Firebase Cloud Messaging is connected to your Unit 1 account.' },
+      notification: { title: title.trim(), body: body.trim() },
       data: { type: 'unit1_test' },
       android: { priority: 'high', notification: { channelId: 'unit1_production_alerts', priority: 'high', sound: 'default' } },
     });

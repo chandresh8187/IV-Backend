@@ -22,7 +22,7 @@ const getProductionContext = async (currentShift = null, allowCorrection = true,
     state: { revision: 0, correction_shift_id: null, opened_by: null, opened_at: null },
     shift: current, correction: false, ignoreCorrection: true,
   };
-  if (!state.correction_shift_id || (state.correction_user_id != null && userId != null && Number(state.correction_user_id) !== Number(userId))) return { state, shift: current, correction: false };
+  if (!state.correction_shift_id || state.correction_user_id == null || userId == null || Number(state.correction_user_id) !== Number(userId)) return { state, shift: current, correction: false };
   const [rows] = await db.query(
     `SELECT *, DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
      FROM shifts WHERE id = ? AND status = 'closed'`, [state.correction_shift_id],

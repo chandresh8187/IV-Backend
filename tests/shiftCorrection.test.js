@@ -18,20 +18,22 @@ function load(relative, dependencies) {
   return module.exports;
 }
 
-function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false, contractorExists = true, existingContractor = null, weightMode = 'manual' } = {}) {
-  let state = { id: 1, correction_shift_id: correction ? 10 : null, revision: correction ? 1 : 2 };
+function fixture({ correction = true, existing = false, usedQty = 2, switchDuringSave = false, contractorExists = true, existingContractor = null, weightMode = 'manual', targetUserId = 4, entryOwner = 4, manageAll = false, labour = null } = {}) {
+  let state = { id: 1, correction_shift_id: correction ? 10 : null, correction_user_id: correction ? targetUserId : null, revision: correction ? 1 : 2 };
   const current = { id: 20, shift_date: '2026-09-12', shift_name: 'day', status: 'active' };
   const previous = { id: 10, shift_date: '2026-09-11', shift_name: 'night', status: 'closed' };
-  const entry = existing ? { id: 50, sr_no: 1, shift_id: 10, planning_id: 7, planning_item_id: 8, contractor_id: existingContractor } : null;
+  const entry = existing ? { created_by: entryOwner, id: 50, sr_no: 1, shift_id: 10, planning_id: 7, planning_item_id: 8, contractor_id: existingContractor } : null;
   const plan = { planning_id: 7, planning_item_id: 8, item_id: 3, challan_no: 'DC/2026-27/001',
     party_name: 'Test party', material_description: 'MS W BEAM + 1.7mm', planned_qty: 10,
     completed_qty: usedQty, target_zinc_percentage: 7, sequence_no: 1 };
+  const calls = [];
   const writes = [];
   const events = [];
   let commits = 0;
   let rollbacks = 0;
   let autoAssignments = 0;
   const query = async (sql, params = []) => {
+    calls.push({ sql, params });
     assert.equal((sql.match(/\?/g) || []).length, params.length, `SQL parameters: ${sql}`);
     if (sql.includes('FROM contractors')) return [contractorExists ? [{ id: params[0] }] : []];
     if (sql.includes('FROM production_shift_context')) {
@@ -40,7 +42,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
     }
     if (sql.includes('UPDATE production_shift_context')) {
       writes.push({ sql, params });
-      state = { ...state, correction_shift_id: sql.includes('correction_shift_id = NULL') ? null : params[0], revision: state.revision + 1 };
+      state = { ...state, correction_user_id: sql.includes('correction_shift_id = NULL') ? null : params[1], correction_shift_id: sql.includes('correction_shift_id = NULL') ? null : params[0], revision: state.revision + 1 };
       return [{ affectedRows: 1 }];
     }
     if (sql.includes('FROM shifts')) {
@@ -49,7 +51,13 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
       return [[shift]];
     }
     if (sql.includes('production_edit_grants')) return [[]];
-    if (sql.includes('FROM labour_weight_consumptions')) return [[]];
+    if (sql.includes('FROM labour_weight_entries')) return [labour ? [{ dipping_qty: labour.total, consumed_qty: labour.cached }] : []];
+    if (sql.includes('FROM labour_weight_consumptions')) {
+      if (!labour || sql.includes('JOIN production_entries')) return [[]];
+      if (sql.includes('WHERE production_entry_id = ?')) return [[{ labour_weight_id: 9, dipping_qty: labour.original }]];
+      return [[{ production_entry_id: 50, dipping_qty: labour.original }, { production_entry_id: 51, dipping_qty: labour.other }]];
+    }
+    if (sql.includes('UPDATE labour_weight_')) { writes.push({ sql, params }); return [{ affectedRows: 1 }]; }
     if (sql.includes("FROM app_settings WHERE setting_key = 'labour_weight_mode'")) return [[{ setting_value: JSON.stringify({ mode: weightMode }) }]];
     if (sql.includes('AS used_qty')) return [[{ used_qty: usedQty }]];
     if (sql.includes('AS next_sr_no')) return [[{ next_sr_no: 4 }]];
@@ -73,7 +81,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
     '../services/productionShiftContextService': context,
     '../services/permissionService': {
       hasPermission: async ({ permissionKey }) =>
-        permissionKey === 'shifts.correct' ? correction : false,
+        permissionKey === 'shifts.correct' ? correction : permissionKey === 'production.save' ? true : permissionKey === 'production.manage_all' ? manageAll : false,
     },
     './plantStatusController': { getPlantStatusRow: async () => ({ status: 'running' }) },
     '../utils/checkEntryZincNotification': { checkEntryZincNotification: async () => ({ triggered: false }) },
@@ -97,7 +105,7 @@ function fixture({ correction = true, existing = false, usedQty = 2, switchDurin
   });
   const app = { get: () => ({ emit: (...args) => events.push(args) }) };
   const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
-  return { context, production, managers, app, response, writes, events,
+  return { context, production, managers, app, response, writes, events, calls,
     stats: () => ({ commits, rollbacks, autoAssignments }),
     request: overrides => ({ app, user: { id: 4, role: 'supervisor' }, body: {
       entry_type: 'full', shift_id: correction ? 10 : 20, shift_revision: correction ? 1 : 0,
@@ -204,9 +212,9 @@ test('resume racing a save is rejected by the transaction context check', async 
   assert.equal(f.stats().rollbacks, 1);
 });
 
-test('a stale add form cannot overwrite an existing SR', async () => {
+test('a stale edit form cannot overwrite a different entry', async () => {
   const f = fixture({ existing: true }); const res = f.response();
-  await f.production.saveProductionEntry(f.request({ entry_id: 0 }), res);
+  await f.production.saveProductionEntry(f.request({ entry_id: 999 }), res);
   assert.equal(res.statusCode, 409);
   assert.equal(f.writes.length, 0);
 });
@@ -230,22 +238,18 @@ test('concurrent manager selections require the latest revision', async () => {
   assert.equal(f.writes.length, 0);
 });
 
-test('admins stay on the current shift while supported roles see the correction shift', async () => {
-  const f = fixture();
-  for (const role of ['supervisor', 'plant_manager', 'superadmin', ' Supervisor ']) {
-    const context = await f.context.getProductionContext(null, f.context.canUseShiftCorrection({ role }));
-    assert.equal(context.shift.id, 10);
-    assert.equal(context.correction, true);
-  }
-  for (const role of ['admin', ' ADMIN ', 'unknown']) {
-    const context = await f.context.getProductionContext(null, f.context.canUseShiftCorrection({ role }));
+test('only the explicitly selected user receives correction context regardless of manager role', async () => {
+  const f = fixture({ targetUserId: 4 });
+  for (const userId of [1, 2, 3, 5, null]) {
+    const context = await f.context.getProductionContext(null, true, userId);
     assert.equal(context.shift.id, 20);
     assert.equal(context.correction, false);
-    assert.equal(context.state.revision, 0);
-    assert.equal(context.state.correction_shift_id, null);
-    assert.equal(context.ignoreCorrection, true);
-    assert.throws(() => f.context.assertContext({ shift_id: 10 }, context));
   }
+  const selected = await f.context.getProductionContext(null, false, 4);
+  assert.equal(selected.shift.id, 10);
+  assert.equal(selected.correction, true);
+  const legacy = fixture({ targetUserId: null });
+  assert.equal((await legacy.context.getProductionContext(null, true, 4)).correction, false);
 });
 
 test('opening correction changes only the shared context and persists across reads', async () => {
@@ -253,7 +257,7 @@ test('opening correction changes only the shared context and persists across rea
   await f.managers.openCorrection({ app: f.app, user: { id: 1 }, body: { revision: 2, shift_id: 10 } }, res);
   assert.equal(res.statusCode, 200);
   for (let read = 0; read < 2; read += 1) {
-    const context = await f.context.getProductionContext();
+    const context = await f.context.getProductionContext(null, true, 1);
     assert.equal(context.shift.id, 10);
     assert.equal(context.correction, true);
     assert.equal(context.state.revision, 3);
@@ -289,4 +293,154 @@ test('selection weight mode rejects a new production entry without a chosen dip'
   assert.equal(res.statusCode, 400);
   assert.match(res.body.message, /Select the labour weight/);
   assert.equal(f.stats().commits, 0);
+});
+
+
+test('selected user enters correction while another user remains on the active shift', async () => {
+  const f = fixture({ targetUserId: 4 });
+  const selected = await f.context.getProductionContext(null, false, 4);
+  const other = await f.context.getProductionContext(null, true, 5);
+  assert.equal(selected.correction, true);
+  assert.equal(selected.shift.id, 10);
+  assert.equal(other.correction, false);
+  assert.equal(other.shift.id, 20);
+});
+
+test('the selected correction user can edit entries created by another supervisor without a grant', async () => {
+  for (const manageAll of [false, true]) {
+    const f = fixture({ targetUserId: 4, entryOwner: 5, existing: true, manageAll });
+    const res = f.response();
+    await f.production.saveProductionEntry(f.request(), res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.action, 'updated');
+    assert.ok(f.writes.some(write => write.sql.includes('UPDATE production_entries')));
+  }
+});
+
+test('targeted correction allows editing and server-assigns a new SR despite an existing SR', async () => {
+  const own = fixture({ targetUserId: 4, existing: true });
+  const edited = own.response();
+  await own.production.saveProductionEntry(own.request(), edited);
+  assert.equal(edited.statusCode, 200);
+  const other = fixture({ targetUserId: 4, existing: true, entryOwner: 5 });
+  const added = other.response();
+  await other.production.saveProductionEntry(other.request({ entry_id: 0 }), added);
+  assert.equal(added.statusCode, 201);
+  assert.ok(other.writes.some(write => write.sql.includes('INSERT INTO production_entries')));
+  assert.ok(!other.writes.some(write => write.sql.includes('UPDATE production_entries')));
+});
+
+let DatabaseSync;
+try { ({ DatabaseSync } = require('node:sqlite')); } catch {}
+test('only the selected user sees and can edit all creators in the correction shift; other users stay live', { skip: !DatabaseSync }, async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE production_entries (id INTEGER, shift_id INTEGER, created_by INTEGER, updated_by INTEGER, contractor_id INTEGER, shift_date TEXT, sr_no INTEGER);
+    CREATE TABLE contractors (id INTEGER, name TEXT);
+    CREATE TABLE users (id INTEGER, name TEXT);
+    CREATE TABLE production_edit_grants (id INTEGER, production_entry_id INTEGER, user_id INTEGER, used_at TEXT, revoked_at TEXT);
+    INSERT INTO production_entries VALUES (1,10,4,NULL,NULL,'2026-09-11',1),(2,10,5,NULL,NULL,'2026-09-11',2),(3,20,4,NULL,NULL,'2026-09-12',1),(4,20,5,NULL,NULL,'2026-09-12',2);`);
+  try {
+    for (const manageAll of [false, true]) {
+      const f = fixture({ targetUserId: 4, manageAll });
+      await f.production.getProductions({ user: { id: 4, role: manageAll ? 'superadmin' : 'supervisor' }, query: { shift_id: 10 } }, f.response());
+      const listing = f.calls.find(call => call.sql.includes('active_grant.user_id AS editable_user_id'));
+      const rows = db.prepare(listing.sql).all(...listing.params);
+      assert.deepEqual(rows.map(row => row.id), [1,2]);
+      assert.ok(rows.every(row => row.can_edit === 1));
+    }
+    const f = fixture({ targetUserId: 5 });
+    await f.production.getProductions({ user: { id: 4, role: 'supervisor' }, query: { shift_id: 20 } }, f.response());
+    const listing = f.calls.find(call => call.sql.includes('active_grant.user_id AS editable_user_id'));
+    assert.deepEqual(db.prepare(listing.sql).all(...listing.params).map(row => row.id), [3,4]);
+    // Live listing resolves each user's shift on the server, ignoring a stale client shift ID.
+    for (const [id, role, expected] of [[4, 'supervisor', [1,2]], [5, 'superadmin', [3,4]], [6, 'superadmin', [3,4]], [7, 'plant_manager', [3,4]], [8, 'supervisor', [3,4]]]) {
+      const live = fixture({ targetUserId: 4 });
+      await live.production.getProductions({ user: { id, role }, query: { live: 'true', shift_id: id === 4 ? 20 : 10 } }, live.response());
+      const call = live.calls.find(call => call.sql.includes('active_grant.user_id AS editable_user_id'));
+      assert.deepEqual(db.prepare(call.sql).all(...call.params).map(row => row.id), expected);
+    }
+  } finally { db.close(); }
+});
+
+
+test('shift status does not send a past-shift preview to other users or managers', async () => {
+  const f = fixture({ targetUserId: 4 });
+  let previewReads = 0;
+  const handler = load('controllers/shiftController.js', {
+    '../services/automaticShiftService': { TIME_ZONE: 'Asia/Kolkata', getShiftSchedule: async () => ({}),
+      ensureAutomaticShift: async () => ({ id: 20, shift_name: 'day', shift_date: '2026-09-12' }), getCurrentShiftInfo: () => ({}) },
+    './plantStatusController': { getPlantStatusRow: async () => ({ status: 'running' }) },
+    '../services/productionShiftContextService': f.context,
+    '../services/permissionService': { hasPermission: async () => true },
+    '../config/db': { query: async () => { previewReads++; return [[{ id: 10, shift_name: 'night' }]]; } },
+  });
+  const selected = f.response();
+  await handler.getShiftStatus({ user: { id: 4, role: 'supervisor' } }, selected);
+  assert.equal(selected.body.data.correction_mode, true);
+  assert.equal(selected.body.data.production_shift.id, 10);
+  assert.equal(selected.body.data.correction_shift.id, 10);
+  for (const [id, role] of [[5, 'superadmin'], [6, 'superadmin'], [7, 'plant_manager'], [8, 'supervisor']]) {
+  const manager = f.response();
+  await handler.getShiftStatus({ user: { id, role } }, manager);
+  assert.equal(manager.body.data.correction_mode, false);
+  assert.equal(manager.body.data.production_shift.id, 20);
+  assert.equal(manager.body.data.correction_shift, null);
+  assert.equal(manager.body.data.correction_active, true);
+  }
+  assert.equal(previewReads, 1);
+});
+
+
+test('a non-selected supervisor cannot save against the past shift', async () => {
+  const f = fixture({ targetUserId: 5, existing: true });
+  const res = f.response();
+  await f.production.saveProductionEntry(f.request(), res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(f.writes.length, 0);
+});
+
+
+test('correction reconciles stale labour counter from allocation ledger', async () => {
+  const f = fixture({ existing: true, targetUserId: 4, labour: { total: 93, cached: 100, original: 3, other: 90 } });
+  const res = f.response();
+  await f.production.saveProductionEntry(f.request({ dipping_qty: 3 }), res);
+  assert.equal(res.statusCode, 200);
+  const update = f.writes.find(write => write.sql.includes('UPDATE labour_weight_entries'));
+  assert.deepEqual(Array.from(update.params), [93, 93, 9]);
+  assert.equal(f.stats().commits, 1);
+});
+
+test('correction rejects real labour over-allocation even when cached counter is too low', async () => {
+  const f = fixture({ existing: true, targetUserId: 4, labour: { total: 93, cached: 3, original: 3, other: 90 } });
+  const res = f.response();
+  await f.production.saveProductionEntry(f.request({ dipping_qty: 4 }), res);
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.message, /93 NOS total/);
+  assert.match(res.body.message, /90 NOS assigned/);
+  assert.match(res.body.message, /up to 3 NOS/);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.stats().rollbacks, 1);
+});
+
+test('correction updates split labour allocation within its available balance', async () => {
+  const f = fixture({ existing: true, targetUserId: 4, labour: { total: 93, cached: 93, original: 3, other: 88 } });
+  const res = f.response();
+  await f.production.saveProductionEntry(f.request({ dipping_qty: 5 }), res);
+  assert.equal(res.statusCode, 200);
+  const update = f.writes.find(write => write.sql.includes('UPDATE labour_weight_entries'));
+  assert.deepEqual(Array.from(update.params), [93, 93, 9]);
+});
+
+
+test('other supervisors and managers can add live entries while the selected user corrects a past shift', async () => {
+  for (const role of ['supervisor', 'superadmin', 'plant_manager']) {
+    const f = fixture({ targetUserId: 5 });
+    const req = f.request({ shift_id: 20, shift_revision: 1 });
+    req.user.role = role;
+    const res = f.response();
+    await f.production.saveProductionEntry(req, res);
+    assert.equal(res.statusCode, 201);
+    const insert = f.writes.find(write => write.sql.includes('INSERT INTO production_entries'));
+    assert.equal(insert.params[0], 20);
+  }
 });

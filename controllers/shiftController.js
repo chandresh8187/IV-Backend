@@ -16,7 +16,9 @@ const getShiftStatus = async (req, res) => {
     const shiftCorrectionAllowed = await hasPermission({ userId: req.user.id, role: req.user.role, permissionKey: 'shifts.correct' });
     const productionContext = await getProductionContext(activeShift, shiftCorrectionAllowed, req.user.id);
     const correctionShiftId = productionContext.state.correction_shift_id;
-    const [correctionShifts] = shiftCorrectionAllowed && correctionShiftId
+    // Only the selected user's Live Production should open the past shift.
+    // Managers still receive correction_active so they can close the session.
+    const [correctionShifts] = productionContext.correction && correctionShiftId
       ? await db.query(
         `SELECT *, DATE_FORMAT(shift_date, '%Y-%m-%d') AS shift_date
          FROM shifts WHERE id = ? AND status = 'closed'`, [correctionShiftId],

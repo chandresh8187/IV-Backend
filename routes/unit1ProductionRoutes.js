@@ -7,10 +7,12 @@ const { coilMatchesJob } = require('../services/unit1CoilMatch');
 const jobCardRoutes = require('./unit1JobCardRoutes');
 const { publishUnit1Change } = require('../services/unit1Realtime');
 const { getSchedule, currentShift } = require('../services/unit1ShiftService');
+const { coilBalance } = require('../services/unit1CoilBalance');
+const { returnCoil } = require('../services/unit1ReturnCoil');
 const { theoreticalWeightKg, holeScrapKg, roundKg } = require('../services/unit1MaterialWeight');
 
 const runColumns = `r.id, r.machine_id AS machineId, m.code AS machineCode, m.name AS machineName,
-  r.coil_id AS coilId, r.coil_number AS coilNumber, c.internal_id AS coilInternalId,
+  r.coil_id AS coilId, r.coil_number AS coilNumber, c.internal_id AS coilInternalId, c.rate_per_kg AS coilRatePerKg,
   c.invoice, c.material_type AS materialType, c.grade, c.width_mm AS widthMm,
   c.thickness_mm AS thicknessMm, c.coil_qty AS coilQty, c.actual_net_kg AS coilBatchWeightKg,
   r.job_card_id AS jobCardId, j.member_name AS memberName, j.section_size AS sectionSize,
@@ -19,6 +21,8 @@ const runColumns = `r.id, r.machine_id AS machineId, m.code AS machineCode, m.na
   j.punch_size AS punchSize, r.hole_checked_at AS holeCheckedAt,
   r.hole_checked_by AS holeCheckedBy, r.product_type AS productType, r.status,
   r.produced_pieces AS producedPieces,
+  (SELECT COALESCE(SUM(jr.produced_pieces),0) FROM unit1_production_runs jr WHERE jr.job_card_id=r.job_card_id) AS jobProducedPieces,
+  (SELECT COALESCE(SUM(cb.theoretical_used_kg),0) FROM unit1_production_runs cr JOIN unit1_production_bundles cb ON cb.run_id=cr.id WHERE cr.coil_id=r.coil_id AND cr.coil_number=r.coil_number) AS coilUsedKg,
   (SELECT COALESCE(SUM(b.theoretical_used_kg),0) FROM unit1_production_bundles b WHERE b.run_id=r.id) AS theoreticalUsedKg,
   (SELECT CASE WHEN COUNT(*)<>COUNT(b.hole_scrap_kg) THEN NULL ELSE COALESCE(SUM(b.hole_scrap_kg),0) END FROM unit1_production_bundles b WHERE b.run_id=r.id) AS holeScrapKg,
   (SELECT density_g_cm3 FROM unit1_material_densities d WHERE d.material_type=c.material_type) AS densityGcm3,
@@ -41,7 +45,7 @@ async function getRun(id) {
 function withWeight(run) {
   const startingKg = Number(run.coilBatchWeightKg) / Number(run.coilQty || 1);
   const usedKg = Number(run.theoreticalUsedKg || 0);
-  return { ...run, perCoilStartingKg: roundKg(startingKg), theoreticalUsedKg: roundKg(usedKg), theoreticalRemainingKg: roundKg(startingKg - usedKg), holeScrapKg: run.holeScrapKg === null ? null : roundKg(run.holeScrapKg) };
+  return { ...run, perCoilStartingKg: roundKg(startingKg), theoreticalUsedKg: roundKg(usedKg), coilUsedKg: roundKg(Number(run.coilUsedKg || 0)), theoreticalRemainingKg: roundKg(startingKg - Number(run.coilUsedKg || 0)), holeScrapKg: run.holeScrapKg === null ? null : roundKg(run.holeScrapKg) };
 }
 
 async function inTransaction(work) {
@@ -91,8 +95,8 @@ router.get('/available-coils', access([], 'unit1.production.view'), async (req, 
   try {
     const [rows] = await db.query(`SELECT c.id, c.internal_id AS internalId, c.invoice,
       c.material_type AS materialType, c.grade, c.width_mm AS widthMm, c.thickness_mm AS thicknessMm,
-      c.coil_qty AS coilQty, c.actual_net_kg AS totalWeightKg, COUNT(r.id) AS usedQty
-      FROM coils c LEFT JOIN unit1_production_runs r ON r.coil_id = c.id
+      c.coil_qty AS coilQty, c.actual_net_kg AS totalWeightKg, COUNT(DISTINCT r.coil_number) AS usedQty
+      FROM coils c LEFT JOIN unit1_production_runs r ON r.coil_id = c.id AND r.status <> 'returned'
       WHERE c.status IN ('in_stock','allocated')
       GROUP BY c.id HAVING usedQty < c.coil_qty ORDER BY c.received_at DESC, c.id DESC`);
     res.json({ data: rows.map(row => ({ ...row, availableQty: Number(row.coilQty) - Number(row.usedQty) })) });
@@ -104,7 +108,7 @@ router.get('/available-coils/:id/used', access([], 'unit1.production.view'), asy
   const id = positiveId(req.params.id);
   if (!id) return res.status(400).json({ error: 'Invalid coil ID.' });
   try {
-    const [rows] = await db.execute('SELECT coil_number AS coilNumber FROM unit1_production_runs WHERE coil_id = ? ORDER BY coil_number', [id]);
+    const [rows] = await db.execute(`SELECT DISTINCT coil_number AS coilNumber FROM unit1_production_runs WHERE coil_id = ? AND status <> 'returned' ORDER BY coil_number`, [id]);
     res.json({ data: rows.map(row => row.coilNumber) });
   } catch (error) { next(error); }
 });
@@ -118,10 +122,12 @@ router.post('/verify-coil', access([], 'unit1.production.coil.assign'), async (r
     const [[[job]], [[coil]], [used]] = await Promise.all([
       db.execute('SELECT id,status,machine_id AS machineId,material_type AS materialType,coil_width_mm AS coilWidthMm,coil_thickness_mm AS coilThicknessMm FROM unit1_job_cards WHERE id=?', [jobCardId]),
       db.execute('SELECT id,status,qr_generated_at AS qrGeneratedAt,coil_qty AS coilQty,material_type AS materialType,width_mm AS widthMm,thickness_mm AS thicknessMm FROM coils WHERE id=?', [coilId]),
-      db.execute('SELECT id FROM unit1_production_runs WHERE coil_id=? AND coil_number=? LIMIT 1', [coilId, coilNumber]),
+      db.execute(`SELECT id FROM unit1_production_runs WHERE coil_id=? AND coil_number=? AND status <> 'returned' LIMIT 1`, [coilId, coilNumber]),
     ]);
     if (!job || job.status !== 'open' || !job.machineId) return res.status(409).json({ error: 'Assign an open job card to a machine first.' });
     if (!coil || !coil.qrGeneratedAt || !['in_stock','allocated'].includes(coil.status) || coilNumber > coil.coilQty || used.length) return res.status(409).json({ error: 'This numbered coil is not available for production.' });
+    const balance = await coilBalance(db, coilId, coilNumber);
+    if (balance.remainingKg <= 0) return res.status(409).json({ error: 'This numbered coil has no remaining material.' });
     if (!coilMatchesJob(coil, job)) return res.status(409).json({ error: 'Incorrect coil for current job card. Material, width and thickness must match.' });
     res.json({ data: { compatible: true, jobCardId, coilId, coilNumber } });
   } catch (error) { next(error); }
@@ -190,7 +196,7 @@ router.get('/history', access([], 'unit1.production.view'), async (req, res, nex
         j.cut_length_mm AS cutLengthMm,j.customer_name AS customerName,
         j.project_name_capacity AS projectName,j.material_type AS materialType,
         m.id AS machineId,m.name AS machineName,m.code AS machineCode,
-        c.id AS coilId,c.internal_id AS coilInternalId,r.coil_number AS coilNumber,
+        c.id AS coilId,c.internal_id AS coilInternalId, c.rate_per_kg AS coilRatePerKg,r.coil_number AS coilNumber,
         u.name AS enteredByName,b.entered_by AS enteredBy
         ${source} LEFT JOIN users u ON u.id=b.entered_by ${condition}
         ORDER BY b.created_at DESC,b.id DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, params),
@@ -216,7 +222,7 @@ router.get('/machines/:machineId/entries', access([], 'unit1.production.view'), 
       j.id AS jobCardId,j.member_name AS memberName,j.section_size AS sectionSize,
       j.cut_length_mm AS cutLengthMm,j.customer_name AS customerName,j.project_name_capacity AS projectName,
       COALESCE(b.shift,j.shift) AS shift,b.shift_date AS shiftDate,j.material_type AS materialType,
-      c.id AS coilId,c.internal_id AS coilInternalId,r.coil_number AS coilNumber
+      c.id AS coilId,c.internal_id AS coilInternalId, c.rate_per_kg AS coilRatePerKg,r.coil_number AS coilNumber
       FROM unit1_production_bundles b JOIN unit1_production_runs r ON r.id=b.run_id
       JOIN unit1_job_cards j ON j.id=r.job_card_id JOIN coils c ON c.id=r.coil_id
       LEFT JOIN users u ON u.id=b.entered_by WHERE ${where} ORDER BY b.created_at ASC,b.id ASC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, params);
@@ -274,8 +280,10 @@ router.post('/runs', access([], 'unit1.production.coil.assign'), async (req, res
       if (Number(progress.pieces) >= Number(job.production_qty)) throw httpError(409, 'Job card production quantity is already complete.');
       const [machineRuns] = await connection.execute("SELECT id FROM unit1_production_runs WHERE machine_id = ? AND status IN ('setup','running','paused') LIMIT 1", [machineId]);
       if (machineRuns.length) throw httpError(409, 'This machine already has an open production run.');
-      const [coilRuns] = await connection.execute('SELECT id FROM unit1_production_runs WHERE coil_id = ? AND coil_number = ? LIMIT 1', [coilId, coilNumber]);
-      if (coilRuns.length) throw httpError(409, 'This numbered coil has already been assigned to production.');
+      const [coilRuns] = await connection.execute(`SELECT id FROM unit1_production_runs WHERE coil_id = ? AND coil_number = ? AND status <> 'returned' LIMIT 1`, [coilId, coilNumber]);
+      if (coilRuns.length) throw httpError(409, 'This numbered coil is active or already completed.');
+      const balance = await coilBalance(connection, coilId, coilNumber);
+      if (balance.remainingKg <= 0) throw httpError(409, 'This numbered coil has no remaining material.');
       const [insert] = await connection.execute(
         "INSERT INTO unit1_production_runs (machine_id, coil_id, coil_number, product_type, job_card_id, status, started_at, created_by) VALUES (?, ?, ?, ?, ?, 'setup', UTC_TIMESTAMP(3), ?)",
         [machineId, coilId, coilNumber, job.structure_type, jobCardId, req.user.id],
@@ -327,16 +335,18 @@ router.post('/runs/:id/bundles', access([], 'unit1.production.bundle'), async (r
   if (!id || !pieces || pieces > 100000) return res.status(400).json({ error: 'Bundle pieces must be a whole number from 1 to 100000.' });
   try {
     await inTransaction(async connection => {
-      const [[run]] = await connection.execute('SELECT machine_id AS machineId,status,job_card_id AS jobCardId,coil_id AS coilId,hole_checked_at AS holeCheckedAt FROM unit1_production_runs WHERE id=? FOR UPDATE', [id]);
+      const [[run]] = await connection.execute('SELECT machine_id AS machineId,status,job_card_id AS jobCardId,coil_id AS coilId,coil_number AS coilNumber,hole_checked_at AS holeCheckedAt FROM unit1_production_runs WHERE id=? FOR UPDATE', [id]);
       if (!run) throw httpError(404, 'Production run not found.');
       requireMachine(req, run.machineId);
       if (run.status !== 'running' || !run.holeCheckedAt || !run.jobCardId) throw httpError(409, 'Supervisor must approve the first-piece hole check before bundle entry.');
       const [[job]] = await connection.execute('SELECT production_qty AS productionQty,member_name AS memberName,cut_length_mm AS cutLengthMm,punch_size AS punchSize FROM unit1_job_cards WHERE id=? FOR UPDATE', [run.jobCardId]);
-      const [[coil]] = await connection.execute('SELECT material_type AS materialType,width_mm AS widthMm,thickness_mm AS thicknessMm FROM coils WHERE id=?', [run.coilId]);
+      const [[coil]] = await connection.execute('SELECT material_type AS materialType,width_mm AS widthMm,thickness_mm AS thicknessMm FROM coils WHERE id=? FOR UPDATE', [run.coilId]);
       const [[material]] = await connection.execute('SELECT density_g_cm3 AS densityGcm3 FROM unit1_material_densities WHERE material_type=?', [coil.materialType]);
       const densityGcm3 = Number(material?.densityGcm3 ?? 7.85);
       const usedKg = theoreticalWeightKg({ widthMm: coil.widthMm, thicknessMm: coil.thicknessMm, lengthMm: job.cutLengthMm, pieces, densityGcm3 });
       if (usedKg === null) throw httpError(409, 'Coil width, thickness and job card cut length are required to calculate material use.');
+      const balance = await coilBalance(connection, run.coilId, run.coilNumber);
+      if (usedKg > balance.remainingKg + 0.00005) throw httpError(409, 'Bundle exceeds the remaining material on this numbered coil.');
       const [holes] = await connection.execute('SELECT COALESCE(punch_size, ?) AS punchSize FROM unit1_job_card_holes WHERE job_card_id=? ORDER BY sequence_no', [job.punchSize, run.jobCardId]);
       const scrapKg = holeScrapKg({ holes, thicknessMm: coil.thicknessMm, pieces, densityGcm3 });
       const [[progress]] = await connection.execute('SELECT COALESCE(SUM(produced_pieces),0) AS produced FROM unit1_production_runs WHERE job_card_id=?', [run.jobCardId]);
@@ -391,6 +401,16 @@ router.post('/runs/:id/remove-coil', access([], 'unit1.production.coil.remove'),
   } catch (error) { next(error); }
 });
 
+router.post('/runs/:id/return-coil', access([], 'unit1.production.coil.remove'), async (req, res, next) => {
+  const id = positiveId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid production run ID.' });
+  try {
+    await inTransaction(connection => returnCoil(connection, id, req.user.id));
+    publish(req, id, 'coil_returned');
+    res.json({ data: await getRun(id) });
+  } catch (error) { next(error); }
+});
+
 router.post('/runs/:id/:action', access([], 'unit1.production.supervise'), async (req, res, next) => {
   const id = positiveId(req.params.id);
   const action = req.params.action;
@@ -412,7 +432,7 @@ router.post('/runs/:id/:action', access([], 'unit1.production.supervise'), async
         if (!['running', 'paused'].includes(run.status)) throw httpError(409, 'Complete the first-piece check or remove the setup coil first.');
         await connection.execute("UPDATE unit1_production_runs SET run_seconds = run_seconds + CASE WHEN status = 'running' THEN GREATEST(TIMESTAMPDIFF(SECOND, last_resumed_at, UTC_TIMESTAMP(3)), 0) ELSE 0 END, last_resumed_at = NULL, status = 'completed', completed_at = UTC_TIMESTAMP(3) WHERE id = ?", [id]);
         const [[coil]] = await connection.execute('SELECT coil_qty AS coilQty FROM coils WHERE id = ? FOR UPDATE', [run.coilId]);
-        const [[count]] = await connection.execute("SELECT COUNT(*) AS completedQty FROM unit1_production_runs WHERE coil_id = ? AND status = 'completed'", [run.coilId]);
+        const [[count]] = await connection.execute("SELECT COUNT(DISTINCT coil_number) AS completedQty FROM unit1_production_runs WHERE coil_id = ? AND status = 'completed'", [run.coilId]);
         if (Number(count.completedQty) >= Number(coil.coilQty)) await connection.execute("UPDATE coils SET status = 'consumed' WHERE id = ?", [run.coilId]);
       }
       await connection.execute('INSERT INTO unit1_production_events (run_id, event_type, actor_user_id) VALUES (?, ?, ?)', [id, action === 'pause' ? 'paused' : action === 'resume' ? 'resumed' : 'completed', req.user.id]);

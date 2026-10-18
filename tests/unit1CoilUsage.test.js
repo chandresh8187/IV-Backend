@@ -28,3 +28,28 @@ test('paginates physical coil numbers without changing their identity', () => {
   assert.equal(coils[0].coilNumber, 51);
   assert.equal(coils.at(-1).coilNumber, 100);
 });
+
+test('reinserted coil accumulates usage and pieces across returned runs', () => {
+  const [coil] = numberedCoilUsage({ coilQty: 1, totalWeightKg: 1000 }, [
+    { runId: 10, coilNumber: 1, status: 'returned', theoreticalUsedKg: 400, producedPieces: 80, holeScrapKg: 2, jobCardId: 7 },
+    { runId: 12, coilNumber: 1, status: 'returned', theoreticalUsedKg: 100, producedPieces: 20, holeScrapKg: 1, jobCardId: 8 },
+    { runId: 15, coilNumber: 1, status: 'running', theoreticalUsedKg: 50, producedPieces: 10, holeScrapKg: 0.5, jobCardId: 9 },
+  ]);
+  assert.equal(coil.theoreticalUsedKg, 550);
+  assert.equal(coil.theoreticalRemainingKg, 450);
+  assert.equal(coil.producedPieces, 110);
+  assert.equal(coil.holeScrapKg, 3.5);
+  assert.equal(coil.runId, 15);
+  assert.equal(coil.runStatus, 'running');
+  assert.equal(coil.jobCardId, 9);
+});
+
+test('returned coil stays visible with its full remaining balance', () => {
+  const [coil] = numberedCoilUsage({ coilQty: 1, totalWeightKg: 1000 }, [
+    { runId: 10, coilNumber: 1, status: 'returned', theoreticalUsedKg: 500, producedPieces: 100, holeScrapKg: null },
+    { runId: 11, coilNumber: 1, status: 'returned', theoreticalUsedKg: 10, producedPieces: 2, holeScrapKg: 0.1 },
+  ]);
+  assert.equal(coil.runStatus, 'returned');
+  assert.equal(coil.theoreticalRemainingKg, 490);
+  assert.equal(coil.holeScrapKg, null);
+});

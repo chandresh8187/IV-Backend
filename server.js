@@ -16,6 +16,7 @@ const db = require("./config/db");
 const unit1Db = require("./config/unit1Db");
 const maintenanceModeMiddleware = require("./middleware/maintenanceModeMiddleware");
 const { run: runMigrations } = require("./scripts/migrate");
+const { migrateUnit1Coils } = require('./scripts/migrateUnit1Coils');
 
 const requiredEnvironment = ["DB_HOST", "DB_USER", "DB_NAME", "JWT_SECRET"];
 const missingEnvironment = requiredEnvironment.filter(
@@ -249,6 +250,8 @@ const startServer = async () => {
   // hPanel can launch server.js directly and bypass package.json scripts.
   // Always migrate before accepting requests so code and schema stay aligned.
   await runMigrations({ command: "up", dryRun: false });
+  await migrateUnit1Coils();
+  console.log('Unit 1 schema is ready.');
   const { expireDueTimers } = require('./services/labourTimerService');
   let timerSweepRunning = false;
   const sweepTimers = async () => {

@@ -15,6 +15,8 @@ function validInvoiceDate(value) {
 }
 
 function validateBatchInward(body) {
+  const rate = validateRate(body.ratePerKg);
+  if (rate.error) return rate;
   for (const field of ['invoice', 'invoiceDate', 'vendorCode', 'materialType', 'grade']) {
     if (!text(body[field])) return { error: `${field} is required.` };
   }
@@ -51,7 +53,7 @@ function validateBatchInward(body) {
       internalId, supplier: text(body.vendorCode), supplierCoilId: internalId,
       invoice: text(body.invoice), invoiceDate: text(body.invoiceDate),
       tcNumber: text(body.tcNumber) || null, vendorCode: text(body.vendorCode),
-      grade, materialType, coilQty,
+      grade, materialType, coilQty, ratePerKg: rate.value,
       thicknessMm, widthMm, estimatedKg: totalWeightKg,
       grossKg: totalWeightKg, tareKg: 0, actualNetKg: totalWeightKg,
       qualityStatus: 'pending', qualityNote: null,
@@ -77,6 +79,8 @@ function validateMultiBatchInward(body) {
 function validateInward(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'A coil object is required.' };
   if ('materialType' in body || 'coilQty' in body || 'totalWeightKg' in body) return validateBatchInward(body);
+  const rate = validateRate(body.ratePerKg);
+  if (rate.error) return rate;
   const fields = ['internalId', 'supplier', 'supplierCoilId', 'grade'];
   for (const field of fields) {
     if (!text(body[field])) return { error: `${field} is required.` };
@@ -113,12 +117,20 @@ function validateInward(body) {
       supplierCoilId: text(body.supplierCoilId), invoice: text(body.invoice) || null,
       invoiceDate: invoiceDate || null, tcNumber: text(body.tcNumber) || null,
       vendorCode: text(body.vendorCode) || null,
-      grade: text(body.grade), materialType: null, coilQty: 1, ...numeric,
+      grade: text(body.grade), materialType: null, coilQty: 1, ratePerKg: rate.value, ...numeric,
       actualNetKg: Math.round((numeric.grossKg - numeric.tareKg) * 1000) / 1000,
       qualityStatus, qualityNote: text(body.qualityNote) || null,
       receivedAt: receivedAt.toISOString().slice(0, 23).replace('T', ' '),
     },
   };
+}
+
+function validateRate(value) {
+  if (value == null || value === '') return { value: null };
+  if (!['number', 'string'].includes(typeof value) || !/^\d+(?:\.\d{1,2})?$/.test(String(value).trim()) || !Number.isFinite(Number(value)) || Number(value) <= 0 || Number(value) > 99999999.99) {
+    return { error: 'Rate per kg must be a positive amount up to 99999999.99 with at most two decimal places.' };
+  }
+  return { value: Number(value) };
 }
 
 module.exports = { validateInward, validateMultiBatchInward };

@@ -3,6 +3,7 @@ const db = require('../config/unit1Db');
 const { holeScrapKg } = require('../services/unit1MaterialWeight');
 
 const additions = [
+  ['rate_per_kg', 'DECIMAL(10,2) NULL AFTER actual_net_kg'],
   ['invoice_date', 'DATE NULL AFTER invoice'],
   ['tc_number', 'VARCHAR(100) NULL AFTER invoice_date'],
   ['vendor_code', 'VARCHAR(100) NULL AFTER supplier'],
@@ -216,8 +217,12 @@ async function migrateUnit1Coils() {
   const runNames = new Set(runColumns.map(row => row.COLUMN_NAME));
   if (!runNames.has('job_card_id')) await db.query('ALTER TABLE unit1_production_runs ADD COLUMN job_card_id BIGINT UNSIGNED NULL, ADD KEY idx_unit1_run_job (job_card_id), ADD CONSTRAINT fk_unit1_run_job FOREIGN KEY (job_card_id) REFERENCES unit1_job_cards(id)');
   if (!runNames.has('hole_checked_at')) await db.query('ALTER TABLE unit1_production_runs ADD COLUMN hole_checked_at DATETIME(3) NULL, ADD COLUMN hole_checked_by BIGINT UNSIGNED NULL');
-  await db.query("ALTER TABLE unit1_production_runs MODIFY status ENUM('setup','running','paused','completed') NOT NULL DEFAULT 'setup'");
-  await db.query("ALTER TABLE unit1_production_events MODIFY event_type ENUM('started','pieces_added','paused','resumed','completed','coil_inserted','hole_checked','bundle_added') NOT NULL");
+  await db.query("ALTER TABLE unit1_production_runs MODIFY status ENUM('setup','running','paused','completed','returned') NOT NULL DEFAULT 'setup'");
+  await db.query("ALTER TABLE unit1_production_events MODIFY event_type ENUM('started','pieces_added','paused','resumed','completed','coil_inserted','hole_checked','bundle_added','coil_returned') NOT NULL");
+  // Preserve every use of a physical coil, while allowing only one active use.
+  if (!runNames.has('active_coil_number')) await db.query("ALTER TABLE unit1_production_runs ADD COLUMN active_coil_number INT UNSIGNED GENERATED ALWAYS AS (CASE WHEN status IN ('setup','running','paused') THEN coil_number ELSE NULL END) STORED, ADD UNIQUE KEY uq_unit1_active_coil (coil_id,active_coil_number)");
+  const [oldCoilIndex] = await db.query("SHOW INDEX FROM unit1_production_runs WHERE Key_name='uq_unit1_run_coil'");
+  if (oldCoilIndex.length) await db.query('ALTER TABLE unit1_production_runs ADD INDEX idx_unit1_coil_history (coil_id,coil_number), DROP INDEX uq_unit1_run_coil');
   await db.query(`CREATE TABLE IF NOT EXISTS unit1_run_hole_checks (
     run_id BIGINT UNSIGNED NOT NULL,
     job_card_hole_id BIGINT UNSIGNED NOT NULL,

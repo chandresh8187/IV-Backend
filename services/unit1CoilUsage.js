@@ -2,7 +2,18 @@ const { coilWeightKg } = require('./unit1CoilQr');
 const { roundKg } = require('./unit1MaterialWeight');
 
 function numberedCoilUsage(batch, runs, { startNumber = 1, count = Number(batch.coilQty || 0) } = {}) {
-  const byNumber = new Map(runs.map(run => [Number(run.coilNumber), run]));
+  const byNumber = new Map();
+  for (const run of runs) {
+    const number = Number(run.coilNumber);
+    const previous = byNumber.get(number);
+    // Routes order runs by ID, so metadata describes the latest use.
+    byNumber.set(number, {
+      ...run,
+      theoreticalUsedKg: Number(previous?.theoreticalUsedKg || 0) + Number(run.theoreticalUsedKg || 0),
+      producedPieces: Number(previous?.producedPieces || 0) + Number(run.producedPieces || 0),
+      holeScrapKg: previous?.holeScrapKg === null || run.holeScrapKg === null ? null : Number(previous?.holeScrapKg || 0) + Number(run.holeScrapKg || 0),
+    });
+  }
   return Array.from({ length: count }, (_, index) => {
     const coilNumber = startNumber + index;
     const run = byNumber.get(coilNumber) || null;

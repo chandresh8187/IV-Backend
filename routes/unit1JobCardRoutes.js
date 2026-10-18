@@ -104,7 +104,7 @@ async function save(req, res, next) {
     }
     if (v.stockCoilId) {
       const [[coil]] = await connection.execute('SELECT id,status,coil_qty AS coilQty,material_type AS materialType,width_mm AS widthMm,thickness_mm AS thicknessMm FROM coils WHERE id=? FOR UPDATE', [v.stockCoilId]);
-      const [[used]] = await connection.execute('SELECT COUNT(*) AS usedQty FROM unit1_production_runs WHERE coil_id=?', [v.stockCoilId]);
+      const [[used]] = await connection.execute("SELECT COUNT(DISTINCT coil_number) AS usedQty FROM unit1_production_runs WHERE coil_id=? AND status <> 'returned'", [v.stockCoilId]);
       if (!coil || !['in_stock', 'allocated'].includes(coil.status) || Number(used.usedQty) >= Number(coil.coilQty)) throw Object.assign(new Error('Selected coil is no longer available in stock.'), { status: 409 });
       v.materialType = coil.materialType;
       v.coilWidthMm = Number(coil.widthMm);

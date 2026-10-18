@@ -214,7 +214,11 @@ const saveProductionEntry = async (req, res) => {
       [activeShift.id, serialNumber],
     );
 
-    const existingRow = existingRows.length > 0 ? existingRows[0] : null;
+    const scopedCorrection = productionContext.correction && productionContext.state.correction_user_id != null;
+    // New correction entries receive a server-assigned, shift-wide SR below.
+    // A stale client can suggest an SR already used by another entry.
+    const correctionAddition = scopedCorrection && entry_type === 'full' && req.body.entry_id != null && Number(req.body.entry_id) === 0;
+    const existingRow = correctionAddition ? null : existingRows.length > 0 ? existingRows[0] : null;
     let activeEditGrantId = null;
 
     const canManageAllProduction = existingRow
@@ -266,8 +270,8 @@ const saveProductionEntry = async (req, res) => {
           `SELECT id FROM production_entries WHERE shift_id = ? AND sr_no = ?
            AND COALESCE(row_type, 'entry') = 'entry' FOR UPDATE`, [activeShift.id, serialNumber],
         );
-        if (Number(lockedRows[0]?.id || 0) !== Number(existingRow?.id || 0) ||
-            (req.body.entry_id != null && Number(req.body.entry_id) !== Number(existingRow?.id || 0))) {
+        if (!correctionAddition && (Number(lockedRows[0]?.id || 0) !== Number(existingRow?.id || 0) ||
+            (req.body.entry_id != null && Number(req.body.entry_id) !== Number(existingRow?.id || 0)))) {
           throw Object.assign(new Error('This SR changed while the form was open. Refresh and reopen the entry.'), { status: 409 });
         }
 
@@ -392,9 +396,22 @@ const saveProductionEntry = async (req, res) => {
           if (consumptionRows.length) {
             const linked = consumptionRows[0];
             const [weightRows] = await connection.query('SELECT dipping_qty, consumed_qty FROM labour_weight_entries WHERE id = ? FOR UPDATE', [linked.labour_weight_id]);
-            const nextConsumed = Number(weightRows[0].consumed_qty) - Number(linked.dipping_qty) + qty;
-            if (nextConsumed < 0 || nextConsumed > Number(weightRows[0].dipping_qty)) {
-              throw Object.assign(new Error(`This edit exceeds the ${weightRows[0].dipping_qty} NOS labour weight total.`), { status: 409 });
+            if (!weightRows.length) {
+              throw Object.assign(new Error('The linked labour weight was not found. Refresh and check the labour weight entry.'), { status: 409 });
+            }
+            // Use the allocation ledger, rather than a potentially stale cached consumed_qty.
+            // The parent weight lock serializes edits and new allocations for this weight.
+            const [allocations] = await connection.query(
+              'SELECT production_entry_id, dipping_qty FROM labour_weight_consumptions WHERE labour_weight_id = ? FOR UPDATE',
+              [linked.labour_weight_id],
+            );
+            const otherConsumed = allocations.reduce((total, allocation) =>
+              total + (Number(allocation.production_entry_id) === Number(existingRow.id) ? 0 : Number(allocation.dipping_qty)), 0);
+            const totalQty = Number(weightRows[0].dipping_qty);
+            const availableQty = Math.max(0, totalQty - otherConsumed);
+            const nextConsumed = otherConsumed + qty;
+            if (nextConsumed > totalQty) {
+              throw Object.assign(new Error(`Cannot save ${qty} NOS: labour weight #${linked.labour_weight_id} has ${totalQty} NOS total, with ${otherConsumed} NOS assigned to other production entries. This entry can use up to ${availableQty} NOS. Correct the labour weight quantity first if its recorded total is wrong.`), { status: 409 });
             }
             const [otherLinks] = await connection.query(
               `SELECT p.item_id, p.material FROM labour_weight_consumptions c
@@ -1007,8 +1024,11 @@ const getProductions = async (req, res) => {
       role: req.user.role,
       permissionKey: "production.manage_all",
     });
-    const correction = await getCorrectionState();
-    const canCorrect = correction.correction_shift_id && Number(correction.correction_user_id) === Number(req.user.id) && await hasPermission({
+    const liveListing = ['true', '1'].includes(String(req.query.live));
+    const liveContext = liveListing ? await getProductionContext(null, true, req.user.id) : null;
+    const correction = liveContext ? liveContext.state : await getCorrectionState();
+    const selectedCorrection = correction.correction_shift_id && Number(correction.correction_user_id) === Number(req.user.id);
+    const canCorrect = selectedCorrection && await hasPermission({
       userId: req.user.id, role: req.user.role, permissionKey: 'production.save',
     });
 
@@ -1041,8 +1061,12 @@ const getProductions = async (req, res) => {
     `;
 
     const params = [canManageEveryRow ? 1 : 0, canCorrect ? correction.correction_shift_id : null, req.user.id];
+    if (liveListing || selectedCorrection) {
+      query += ' AND production_entries.shift_id = ?';
+      params.push(liveListing ? liveContext.shift.id : correction.correction_shift_id);
+    }
 
-    if (shift_date) {
+    if (!liveListing && shift_date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(shift_date))) {
         return res.status(400).json({
           success: false,
@@ -1053,7 +1077,7 @@ const getProductions = async (req, res) => {
       params.push(shift_date);
     }
 
-    if (shift_name) {
+    if (!liveListing && shift_name) {
       if (!["day", "night"].includes(String(shift_name).toLowerCase())) {
         return res.status(400).json({
           success: false,
@@ -1064,7 +1088,7 @@ const getProductions = async (req, res) => {
       params.push(shift_name);
     }
 
-    if (shift_id) {
+    if (!liveListing && shift_id) {
       query += ` AND production_entries.shift_id = ?`;
       params.push(shift_id);
     }

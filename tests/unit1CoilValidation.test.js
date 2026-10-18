@@ -31,6 +31,18 @@ const batch = {
   widthMm: '600', thicknessMm: '2.5', coilQty: '4', totalWeightKg: '4020.125',
 };
 
+test('coil rates preserve two decimals and reject invalid amounts', () => {
+  assert.equal(validateInward({ ...batch, ratePerKg: '62.75' }).value.ratePerKg, 62.75);
+  assert.equal(validateInward(batch).value.ratePerKg, null);
+  assert.equal(validateInward({ ...valid, ratePerKg: '50.00' }).value.ratePerKg, 50);
+  for (const ratePerKg of ['-1', '0', '1.234', 'NaN', '1e2', true, {}, '100000000']) {
+    assert.match(validateInward({ ...batch, ratePerKg }).error, /Rate per kg/);
+  }
+  const { validateMultiBatchInward } = require('../services/unit1CoilValidation');
+  const result = validateMultiBatchInward({ ...batch, lines: [{ ...batch, ratePerKg: '61.25' }, { ...batch, ratePerKg: '72.50' }] });
+  assert.deepEqual(result.value.map(coil => coil.ratePerKg), [61.25, 72.5]);
+});
+
 test('batch inward generates its reference and stores quantity and total weight', () => {
   const result = validateInward(batch);
   assert.match(result.value.internalId, /^U1-/);
