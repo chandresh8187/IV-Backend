@@ -13,14 +13,15 @@ try { ({ DatabaseSync } = require('node:sqlite')); } catch { /* Node 20 does not
 function fixture() {
   const db = new DatabaseSync(':memory:');
   db.function('DATE_FORMAT', (value, format) => value == null ? null : String(value).slice(0, format.includes('%H') ? 19 : 10));
+  db.function('TIME_FORMAT', (value, format) => value == null ? null : String(value).slice(0, format === '%H:%i' ? 5 : 8));
   db.exec(`CREATE TABLE users (id INTEGER, name TEXT);
     CREATE TABLE production_entries (id INTEGER, shift_date TEXT, shift_name TEXT);
     CREATE TABLE zinc_stock_movements (id INTEGER, movement_type TEXT, amount_kg REAL,
       zinc_rate_per_kg REAL, plant_after_kg REAL, kettle_after_kg REAL, note TEXT,
       batch_number TEXT, invoice_number TEXT, created_at TEXT, actor_user_id INTEGER,
-      production_entry_id INTEGER, shift_date TEXT, shift_name TEXT);`);
+      production_entry_id INTEGER, shift_date TEXT, shift_name TEXT, transaction_date TEXT, transaction_time TEXT);`);
   const insert = (id, type, amount, entry = null, date = null, shift = null) => db.prepare(`INSERT INTO zinc_stock_movements
-    VALUES (?, ?, ?, NULL, 1000, 500, NULL, NULL, NULL, '2026-10-16 02:00:00', NULL, ?, ?, ?)`)
+    VALUES (?, ?, ?, NULL, 1000, 500, NULL, NULL, NULL, '2026-10-16 02:00:00', NULL, ?, ?, ?, NULL, NULL)`)
     .run(id, type, amount, entry, date, shift);
   return { db, insert, rows: () => buildZincMovementReport(db.prepare(zincMovementLedgerSql).all()).rows };
 }

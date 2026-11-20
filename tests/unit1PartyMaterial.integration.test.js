@@ -1,0 +1,97 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+require('dotenv-flow').config({silent:true});
+const mysql=require('mysql2/promise');
+const {captureProduction}=require('../services/unit1MaterialStock');
+const {recordDispatch}=require('../services/unit1MaterialDispatch');
+const {reviseDispatchWeight}=require('../services/unit1Weighbridge');
+const {partyKey,listParties,getParty,packBundle,dispatchParty,reviseBundleWeight,normalizePartyDispatch}=require('../services/unit1PartyMaterial');
+
+test('bundle dispatch requires a separate valid actual weight for each unique bundle',()=>{
+ const valid={partyKey:partyKey('Test'),destination:'unit2',requestId:'party_dispatch_valid_12345',lines:[{bundleId:1,quantity:10,weighbridgeWeightKg:'100.125'},{bundleId:2,quantity:5,weighbridgeWeightKg:'50.250'}]};
+ const result=normalizePartyDispatch(valid);assert.equal(result.totalNos,15);assert.equal(result.totalWeight,150.375);
+ for(const body of [{partyKey:'wrong'},{lines:[]},{lines:[...valid.lines,valid.lines[0]]},{lines:[{bundleId:1,quantity:0,weighbridgeWeightKg:1}]},{lines:[{bundleId:1,quantity:1,weighbridgeWeightKg:null}]},{finishCoils:'yes'}])assert.throws(()=>normalizePartyDispatch({...valid,...body}),{status:400});
+});
+
+test('MySQL party stock: actual packing, shared QR, per-bundle weights, source coils, corrections and concurrent retries',{skip:process.env.UNIT1_STOCK_DB_TEST!=='1'},async()=>{
+ const host=process.env.UNIT1_DB_HOST||process.env.DB_HOST;assert.ok(['localhost','127.0.0.1','::1'].includes(host),'Use disposable localhost databases only');
+ const config={host,port:Number(process.env.UNIT1_DB_PORT||process.env.DB_PORT)||3306,user:process.env.UNIT1_DB_USER||process.env.DB_USER,password:process.env.UNIT1_DB_PASSWORD??process.env.DB_PASSWORD,decimalNumbers:true};
+ const name='unit1_party_test_'+Date.now();assert.match(name,/^unit1_party_test_\d+$/);
+ const c=await mysql.createConnection(config);let created=false;
+ const tx=async(fn,connection=c)=>{await connection.beginTransaction();try{const result=await fn(connection);await connection.commit();return result;}catch(error){await connection.rollback();throw error;}};
+ try{
+  await c.query('CREATE DATABASE `'+name+'`');created=true;await c.query('USE `'+name+'`');
+  for(const sql of fs.readFileSync(path.join(__dirname,'../database/unit1_material_stock.sql'),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await c.query(sql);
+  await c.query('CREATE TABLE unit1_production_bundles(id INT PRIMARY KEY,run_id INT,pieces INT,member_name VARCHAR(120),entered_by INT,created_at DATETIME,job_snapshot LONGTEXT DEFAULT NULL,theoretical_used_kg DECIMAL(14,3) DEFAULT 0)');
+  await c.query("CREATE TABLE unit1_production_runs(id INT PRIMARY KEY,job_card_id INT,coil_id INT,coil_number INT DEFAULT 1,produced_pieces INT,status VARCHAR(20) DEFAULT 'running',run_seconds INT DEFAULT 0,last_resumed_at DATETIME DEFAULT NULL,completed_at DATETIME DEFAULT NULL)");
+  await c.query('CREATE TABLE unit1_job_cards(id INT PRIMARY KEY,section_size VARCHAR(100),cut_length_mm DECIMAL(12,3),customer_name VARCHAR(150))');
+  await c.query('CREATE TABLE coils(id INT PRIMARY KEY,material_type VARCHAR(20),grade VARCHAR(100),thickness_mm DECIMAL(10,3),actual_net_kg DECIMAL(14,3),coil_qty INT DEFAULT 1,status VARCHAR(20))');
+  await c.query('CREATE TABLE unit1_coil_identifiers(batch_id INT,coil_number INT,code VARCHAR(6))');
+  await c.query('CREATE TABLE unit1_production_events(run_id INT,event_type VARCHAR(30),note TEXT,actor_user_id INT)');
+  await c.query('CREATE TABLE users(id INT PRIMARY KEY,name VARCHAR(100))');await c.query("INSERT INTO users VALUES(7,'Party dispatcher')");
+  await c.query("INSERT INTO coils VALUES(1,'MS','E350',2,500,1,'available'),(2,'MS','E350',2,1000,1,'available'),(3,'MS','E350',3,300,1,'available')");
+  await c.query("INSERT INTO unit1_coil_identifiers VALUES(1,1,'210001'),(2,1,'210002'),(3,1,'210003')");
+  await c.query("INSERT INTO unit1_job_cards VALUES(1,'150 x 75',2300,'Test'),(2,'150 x 75',2300,'Other'),(3,'100 x 50',1200,'Test')");
+  await c.query('INSERT INTO unit1_production_runs(id,job_card_id,coil_id,produced_pieces) VALUES(1,1,1,64),(2,2,2,15),(3,3,3,20)');
+  await c.query("INSERT INTO unit1_production_bundles(id,run_id,pieces,member_name,entered_by,created_at) VALUES(1,1,64,'Column',7,NOW()),(2,2,15,'Column',7,NOW()),(3,3,20,'Rafter',7,NOW())");
+  await c.query('ALTER TABLE coils ADD COLUMN weight_recorded TINYINT NOT NULL DEFAULT 1');
+  await c.query('CREATE TABLE unit1_production_plan_lines(job_card_id INT,plan_id INT,template_id INT)');
+  await captureProduction(c);
+  const key=partyKey('Test');let party=await getParty(c,key);assert.equal(party.producedNos,84);assert.equal(party.availableNos,84);assert.equal(party.bundles.length,0,'existing actual production is available without inventing physical packing');
+  assert.match(party.partyCode,/^[A-Z0-9]{10}$/);assert.match(party.partyCode,/[A-Z]/);assert.match(party.partyCode,/[0-9]/);const originalCode=party.partyCode;assert.equal((await getParty(c,originalCode.toLowerCase())).partyKey,key);assert.equal((await getParty(c,key)).partyCode,originalCode,'refresh retains its permanent manual ID');
+  assert.equal(Number((await listParties(c,'',1,'available')).total),2);assert.equal(Number((await listParties(c,'',1,'partial')).total),0);assert.equal(Number((await listParties(c,'',1,'dispatched')).total),0);await assert.rejects(listParties(c,'',1,'invalid'),{status:400});
+  const listing=await listParties(c,'Column',1);assert.equal(Number(listing.items.find(p=>p.partyKey===key).producedNos),84,'material search includes all material for the matching party');
+  const source=party.sources.find(s=>Number(s.productionBundleId)===1).movementId,source3=party.sources.find(s=>Number(s.productionBundleId)===3).movementId;
+  const pack=(movementId,quantity,requestId)=>tx(db=>packBundle(db,{partyKey:key,movementId,quantity,requestId},7));
+  const a=await pack(source,16,'pack_party_first_12345');const again=await pack(source,16,'pack_party_first_12345');assert.equal(a.id,again.id);
+  await assert.rejects(pack(source,15,'pack_party_first_12345'),{status:409});
+  const b=await pack(source,16,'pack_party_second_12345'),d=await pack(source,32,'pack_party_third_12345'),e=await pack(source3,20,'pack_party_fourth_12345');
+  await assert.rejects(pack(source,1,'pack_party_overflow_12345'),{status:409});
+  party=await getParty(c,key);assert.equal(party.producedNos,84);assert.equal(party.availableNos,84,'printing/packing does not change production or available stock');
+  assert.ok(party.bundles.every(b=>b.partyCode===originalCode&&b.qrPayload.endsWith(originalCode)));
+  assert.equal(new Set(party.bundles.map(b=>b.qrPayload)).size,1,'all party bundles share one QR');assert.equal(new Set(party.bundles.map(b=>b.id)).size,4,'printed bundle numbers distinguish physical bundles');
+  await assert.rejects(tx(db=>recordDispatch(db,{itemId:party.sources[0].itemId,quantity:1,destination:'unit2',requestId:'legacy_packed_dispatch_12345',weighbridgeWeightKg:1},7)),/labelled bundles/);
+  const body={partyKey:key,destination:'unit2',requestId:'party_first_dispatch_12345',lines:[{bundleId:a.id,quantity:8,weighbridgeWeightKg:'50'},{bundleId:b.id,quantity:16,weighbridgeWeightKg:'100'}]};
+  await assert.rejects(tx(db=>dispatchParty(db,{...body,partyKey:partyKey('Other')},7)),/different party/);
+  const first=await tx(db=>dispatchParty(db,body,7));assert.equal(first.quantity,24);assert.equal(first.weighbridgeWeightKg,150);
+  assert.equal((await tx(db=>dispatchParty(db,body,7))).id,first.id,'retry does not dispatch twice');
+  await assert.rejects(tx(db=>dispatchParty(db,{...body,lines:[{bundleId:a.id,quantity:9,weighbridgeWeightKg:50}]},7)),{status:409});
+  party=await getParty(c,key);assert.equal(party.availableNos,60);assert.equal(Number(party.bundles.find(r=>r.id===a.id).availableNos),8);
+  const partial=await listParties(c,'Column',1,'partial');assert.equal(Number(partial.total),1);assert.equal(Number(partial.producedNos),84);assert.equal(Number(partial.dispatchedNos),24);assert.equal(Number(partial.availableNos),60,'filtered totals include all material of the matching party');assert.equal(Number((await listParties(c,'',2,'partial')).total),1);assert.equal((await listParties(c,'',2,'partial')).items.length,0);
+  const [[allocated]]=await c.query('SELECT quantity FROM unit1_material_dispatch_allocations WHERE dispatch_id=?',[first.id]);assert.equal(Number(allocated.quantity),24,'two bundles from one source are allocated once with their combined pieces');
+  await assert.rejects(tx(db=>reviseDispatchWeight(db,first.id,200,7)),/bundle weights/);
+  await tx(db=>reviseBundleWeight(db,first.id,a.id,55,7));
+  const [[header]]=await c.query('SELECT weighbridge_weight_kg FROM unit1_material_dispatches WHERE id=?',[first.id]);assert.equal(Number(header.weighbridge_weight_kg),155);
+  const routes={},router={use(){},get:(url,...handlers)=>{routes[url]=handlers.at(-1)},post(){}};
+  const dependencies={express:{Router:()=>router},'../config/unit1Db':c,'../middleware/unit1AuthMiddleware':()=>{},'../middleware/roleMiddleware':()=>()=>{},'../services/unit1Realtime':{publishUnit1Change(){}}};
+  for(const name of ['unit1MaterialStock','unit1MaterialDispatch','unit1Weighbridge','unit1PartyMaterial','unit1PhysicalCoils'])dependencies['../services/'+name]=require('../services/'+name);
+  require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname,'../routes/unit1MaterialStockRoutes.js'),'utf8'),{require:name=>dependencies[name],module:{exports:{}}});
+  let response;const res={json:value=>{response=value}};
+  await routes['/parties']({query:{q:'Test'}},res,error=>{throw error});assert.equal(Number(response.data.availableNos),60);
+  await routes['/dispatches']({query:{q:'Test'}},res,error=>{throw error});
+  assert.equal(Number(response.data.weighedKg),155);assert.equal(response.data.items[0].bundleWeights.length,2);assert.ok(response.data.items[0].bundleWeights.every(row=>row.coilCode==='210001'));assert.equal(response.data.items[0].actorName,'Party dispatcher');
+  await assert.rejects(tx(db=>dispatchParty(db,{...body,requestId:'premature_finish_12345',finishCoils:true,lines:[{bundleId:a.id,quantity:1,weighbridgeWeightKg:1}]},7)),/undispatched/);
+  assert.equal((await getParty(c,key)).availableNos,60,'failed finishing rolls back dispatch, bundle weights and stock together');
+  const last=await tx(db=>dispatchParty(db,{...body,requestId:'party_final_dispatch_12345',finishCoils:true,lines:[{bundleId:a.id,quantity:8,weighbridgeWeightKg:45},{bundleId:d.id,quantity:32,weighbridgeWeightKg:250},{bundleId:e.id,quantity:20,weighbridgeWeightKg:250}]},7));
+  assert.equal(last.reconciliation.startingKg,800);assert.equal(last.reconciliation.materialKg,700);assert.equal(last.reconciliation.scrapKg,100);assert.equal(last.reconciliation.coils.length,2);
+  assert.equal((await getParty(c,key)).availableNos,0);
+  const completed=await listParties(c,'',1,'dispatched');assert.equal(Number(completed.total),1);assert.equal(Number(completed.producedNos),84);assert.equal(Number(completed.dispatchedNos),84);assert.equal(Number(completed.availableNos),0);assert.equal(Number((await listParties(c,'',1,'partial')).total),0);const available=await listParties(c,'',1,'available');assert.equal(Number(available.total),1);assert.equal(Number(available.availableNos),15);
+  await tx(db=>reviseBundleWeight(db,first.id,a.id,65,7));
+  assert.equal(Number((await c.query('SELECT scrap_kg FROM unit1_coil_weight_settlements'))[0][0].scrap_kg),90,'bundle correction updates existing finished-coil scrap');
+  await assert.rejects(tx(db=>reviseBundleWeight(db,first.id,a.id,999,7)),{status:409});
+  assert.equal(Number((await c.query('SELECT weight_kg FROM unit1_material_dispatch_bundle_weights WHERE dispatch_id=? AND bundle_id=?',[first.id,a.id]))[0][0].weight_kg),65,'invalid correction leaves original actual weight intact');
+  await tx(async db=>{await db.query("UPDATE unit1_job_cards SET customer_name='Corrected party' WHERE id=1");await captureProduction(db,null,1,true);});
+  const corrected=await getParty(c,partyKey('Corrected party'));assert.notEqual(corrected.partyCode,originalCode,'a corrected party gets its own identity without reassigning the previous ID');assert.equal(corrected.producedNos,64);assert.equal(corrected.availableNos,0);assert.ok(corrected.bundles.every(row=>row.needsReprint));assert.ok(corrected.bundles.every(row=>row.originalDetails.customerName==='Test'),'original printed details remain auditable');
+  assert.ok((await c.query('SELECT * FROM unit1_dispatch_weight_revisions'))[0].length>=2);
+  const other=await getParty(c,partyKey('Other')),otherSource=other.sources[0].movementId;
+  const peer=await mysql.createConnection({...config,database:name});
+  try{
+   const ensure=require('../services/unit1MaterialPartyCodes').ensurePartyCode;const newKey='f'.repeat(64);const codes=await Promise.all([ensure(c,newKey),ensure(peer,newKey)]);assert.equal(codes[0],codes[1],'concurrent requests assign only one permanent ID');
+   const race=await Promise.allSettled([tx(db=>packBundle(db,{partyKey:partyKey('Other'),movementId:otherSource,quantity:10,requestId:'pack_race_one_12345'},7)),tx(db=>packBundle(db,{partyKey:partyKey('Other'),movementId:otherSource,quantity:10,requestId:'pack_race_two_12345'},7),peer)]);
+   assert.equal(race.filter(r=>r.status==='fulfilled').length,1,'concurrent packing cannot exceed actual production');
+   const bundle=race.find(r=>r.status==='fulfilled').value;
+   const attempt=(db,key)=>dispatchParty(db,{partyKey:partyKey('Other'),destination:'other',requestId:key,lines:[{bundleId:bundle.id,quantity:10,weighbridgeWeightKg:100}]},7);
+   const dispatched=await Promise.allSettled([tx(db=>attempt(db,'bundle_race_one_12345')),tx(db=>attempt(db,'bundle_race_two_12345'),peer)]);
+   assert.equal(dispatched.filter(r=>r.status==='fulfilled').length,1,'same physical bundle cannot be dispatched twice');
+  }finally{await peer.end();}
+ }finally{if(created)await c.query('DROP DATABASE `'+name+'`');await c.end();}
+});

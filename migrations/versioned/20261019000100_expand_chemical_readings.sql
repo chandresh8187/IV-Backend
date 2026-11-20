@@ -1,0 +1,6 @@
+ALTER TABLE chemical_checks
+  MODIFY COLUMN flux_ph DOUBLE NOT NULL,
+  MODIFY COLUMN flux_density DOUBLE NOT NULL,
+  MODIFY COLUMN flux_temperature_c DOUBLE NULL,
+  MODIFY COLUMN acid_ph DOUBLE NOT NULL,
+  MODIFY COLUMN acid_density DOUBLE NOT NULL;

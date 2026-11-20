@@ -9,12 +9,13 @@ async function returnCoil(connection, id, actorId) {
   if (!run.jobCardId || !['running', 'paused'].includes(run.status)) throw conflict('Only a running or paused coil can be returned. Remove an unapproved setup coil instead.');
   await connection.execute('SELECT id FROM coils WHERE id=? FOR UPDATE', [run.coilId]);
   const balance = await coilBalance(connection, run.coilId, run.coilNumber);
-  if (balance.remainingKg <= 0) throw conflict('This coil has no remaining material. Complete the coil run instead.');
+  if (balance.weightFinished || (balance.remainingKg != null && balance.remainingKg <= 0)) throw conflict('This coil has no remaining material. Complete the coil run instead.');
   await connection.execute(`UPDATE unit1_production_runs SET
     run_seconds=run_seconds+CASE WHEN status='running' THEN GREATEST(TIMESTAMPDIFF(SECOND,last_resumed_at,UTC_TIMESTAMP(3)),0) ELSE 0 END,
     last_resumed_at=NULL,status='returned',completed_at=UTC_TIMESTAMP(3) WHERE id=?`, [id]);
-  await connection.execute("INSERT INTO unit1_production_events (run_id,event_type,note,actor_user_id) VALUES (?,'coil_returned',?,?)", [id, `Returned to stock; calculated remaining ${balance.remainingKg.toFixed(3)} kg`, actorId]);
+  await connection.execute("INSERT INTO unit1_production_events (run_id,event_type,note,actor_user_id) VALUES (?,'coil_returned',?,?)", [id, balance.remainingKg==null?'Coil removed from machine; starting weight not recorded.':'Returned to stock; calculated remaining '+balance.remainingKg.toFixed(3)+' kg', actorId]);
   return balance;
 }
 
 module.exports = { returnCoil };
+

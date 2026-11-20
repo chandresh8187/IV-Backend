@@ -895,3 +895,26 @@ INSERT IGNORE INTO `schema_migrations` (`filename`,`checksum`,`execution_ms`) VA
 ('20261010000200_soft_delete_certificates.sql','c5eefdb70aa544fa93ffb821c7f189438baa3ced47bb906dea838dcef3d3d200',0),
 ('20261016000100_add_zinc_receipt_references.sql','2b92bce750832aac422f16b85eab2d37b20e4e9c028e0c9e1d95aed599011cfe',0),
 ('20261016000200_preserve_zinc_movement_shift.sql','4f1075ca3bb41286748cbab3c99d3ae64342b693e8a4e309f5a1439b44e6592a',0);
+
+CREATE TABLE IF NOT EXISTS `gas_bottle_returns` (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  request_key VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  bottle_id BIGINT UNSIGNED NOT NULL,
+  position_no TINYINT UNSIGNED NOT NULL,
+  run_id BIGINT UNSIGNED NULL,
+  was_used TINYINT(1) NOT NULL,
+  returned_at DATETIME NOT NULL,
+  reason VARCHAR(255) NOT NULL,
+  actor_user_id INT NOT NULL,
+  before_data LONGTEXT NOT NULL,
+  after_data LONGTEXT NOT NULL,
+  original_input LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_gas_return_request (request_key),
+  KEY idx_gas_return_bottle (bottle_id),
+  CONSTRAINT fk_gas_return_bottle FOREIGN KEY (bottle_id) REFERENCES gas_bottles(id),
+  CONSTRAINT fk_gas_return_run FOREIGN KEY (run_id) REFERENCES gas_bottle_runs(id),
+  CONSTRAINT fk_gas_return_actor FOREIGN KEY (actor_user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO schema_migrations (filename,checksum,execution_ms) VALUES ('20261028000100_create_gas_bottle_returns.sql','fb956496212ff0a7b0203d425efd17442cb06a9d69e3c492990dd45900eeee95',0);

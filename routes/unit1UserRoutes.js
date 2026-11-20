@@ -27,6 +27,8 @@ const getUser = async id => {
 };
 const handleError = (error, next) => next(error.code === 'ER_DUP_ENTRY' ? fail(409, 'This email address is already registered.') : error);
 const permissionGroup = key => {
+  if (key.startsWith('unit1.maintenance.')) return 'Maintenance';
+  if (key.startsWith('unit1.material-stock.')) return 'Material stock';
   if (key.startsWith('unit1.production.') || key.startsWith('unit1.jobcards.')) return 'Production';
   if (key.startsWith('unit1.coils.')) return 'Coil stock';
   if (key.startsWith('unit1.materials.')) return 'Materials and grades';
@@ -36,8 +38,8 @@ const permissionGroup = key => {
   if (key.startsWith('unit1.users.')) return 'Users and access';
   return 'Other';
 };
-const groupOrder = ['Production', 'Coil stock', 'Materials and grades', 'Machines', 'Shifts', 'QR settings', 'Users and access', 'Other'];
-const unit1Permissions = permissions => permissions.filter(item => item.key.startsWith('unit1.'))
+const groupOrder = ['Maintenance', 'Production', 'Material stock', 'Coil stock', 'Materials and grades', 'Machines', 'Shifts', 'QR settings', 'Users and access', 'Other'];
+const unit1Permissions = permissions => permissions.filter(item => item.key.startsWith('unit1.') && (!item.key.startsWith('unit1.material-stock.')||['unit1.material-stock.view','unit1.material-stock.dispatch'].includes(item.key)) && !['unit1.coils.edit','unit1.coils.delete'].includes(item.key))
   .map(item => ({ ...item, group: permissionGroup(item.key), label: item.label.replace(/\bUnit 1\s*/g, '') }))
   .sort((left, right) => groupOrder.indexOf(left.group) - groupOrder.indexOf(right.group));
 
@@ -70,7 +72,8 @@ router.put('/:id', access([], 'unit1.users.manage'), async (req, res, next) => {
     if (!user) throw fail(404, 'User not found.');
     if (user.role === 'superadmin') throw fail(403, 'Superadmin accounts cannot be edited here.');
     const value = userFields(req.body);
-    await db.execute('UPDATE users SET name=?,email=?,role=?,assigned_shift=?,assigned_machine_id=IF(?="labour",assigned_machine_id,NULL) WHERE id=?', [value.name, value.email, value.role, value.assignedShift, value.role, id]);
+    // A numeric condition avoids comparing prepared string parameters across collations.
+    await db.execute('UPDATE users SET name=?,email=?,role=?,assigned_shift=?,assigned_machine_id=IF(?,assigned_machine_id,NULL) WHERE id=?', [value.name, value.email, value.role, value.assignedShift, value.role === 'labour' ? 1 : 0, id]);
     publishUnit1Change(req, 'users', { userId: id, action: 'updated' });
     res.json({ data: await getUser(id) });
   } catch (error) { handleError(error, next); }

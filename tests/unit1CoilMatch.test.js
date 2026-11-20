@@ -22,5 +22,7 @@ test('production managers can assign and unassign job cards and coils', () => {
   assert.equal(isDefaultAllowed('supervisor', 'unit1.jobcards.assign'), false);
   assert.equal(isDefaultAllowed('supervisor', 'unit1.production.coil.assign'), true);
   assert.equal(isDefaultAllowed('supervisor', 'unit1.production.supervise'), true);
-  assert.equal(isDefaultAllowed('labour', 'unit1.production.bundle'), true);
+  assert.equal(isDefaultAllowed('labour', 'unit1.production.bundle'), false);
 });
+
+test('selected coils may vary in width and thickness while retaining job material',()=>{const job={materialType:'MS',coilWidthMm:258,coilThicknessMm:3};assert.equal(coilMatchesJob({materialType:'MS',widthMm:256,thicknessMm:2.8},job,{allowSizeVariation:true}),true);assert.equal(coilMatchesJob({materialType:'GL',widthMm:256,thicknessMm:2.8},job,{allowSizeVariation:true}),false);});

@@ -26,3 +26,28 @@ test('hole scrap counts every hole position in every produced piece', () => {
   assert.ok(Math.abs(bundle - onePiece * 80) < 1e-10);
   assert.equal(holeScrapKg({ holes: [{ punchSize: 'unknown' }], thicknessMm: 3 }), null);
 });
+test('cut blade scrap adds one full-width offcut per produced piece', () => {
+  const { productionWeightKg } = require('../services/unit1MaterialWeight');
+  const piece = { widthMm: 298, thicknessMm: 2, lengthMm: 2000, pieces: 100, densityGcm3: 7.85 };
+  const weights = productionWeightKg({ ...piece, cutBladeSizeMm: 5, cutBladeThicknessMm: 2 });
+  assert.equal(weights.bladeKg, 2.3393);
+  assert.equal(Number(weights.usedKg.toFixed(4)), 938.0593);
+  assert.equal(weights.blankKg, 935.72);
+  assert.equal(productionWeightKg(piece).bladeKg, null);
+  assert.equal(productionWeightKg({ ...piece, cutBladeSizeMm: 0 }).bladeKg, 0);
+  assert.equal(productionWeightKg({ ...piece, cutBladeSizeMm: 5 }).usedKg, null);
+});
+
+test('an assigned alternate job-card thickness applies to rejected pieces without adding scrap to their finished weight', () => {
+  const { jobThicknessForCoil } = require('../services/unit1AllowedCoilSizes');
+  const { rejectionWeight } = require('../services/unit1RejectedMaterial');
+  const coil = { widthMm: 298, thicknessMm: 3, cutLengthMm: 2000, densityGcm3: 7.85 };
+  const job = { coilThicknessMm: 2, allowedCoilSizes: [{ widthMm: 298, thicknessMm: 2 }, { widthMm: 298, thicknessMm: 3 }] };
+  const holes = [{ punchSize: 'Ø9' }];
+  const before = rejectionWeight(coil, holes, 100);
+  const after = rejectionWeight({ ...coil, cutBladeSizeMm: 5, cutBladeThicknessMm: jobThicknessForCoil(coil, job) }, holes, 100);
+  assert.equal(after.rejectionWeightInputs.cutBladeThicknessMm, 3);
+  assert.equal(after.rejectedCutBladeScrapKg, 3.509);
+  assert.equal(after.rejectedWeightKg, before.rejectedWeightKg);
+  assert.ok(Math.abs(after.rejectedUsedKg - before.rejectedUsedKg - after.rejectedCutBladeScrapKg) < .00011);
+});

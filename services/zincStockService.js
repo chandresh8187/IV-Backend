@@ -1,3 +1,4 @@
+const { DateTime } = require('luxon');
 const ZINC_DENSITY_KG_M3 = 7140;
 const ZINC_KG_PER_MM = 35.7;
 const TANK = Object.freeze({
@@ -38,6 +39,23 @@ function normalizeMovement(body) {
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   if (note.length > 255) throw fail('Notes must be 255 characters or fewer.');
   const result = { action: body.action, expected_revision: body.expected_revision, request_id: body.request_id, note };
+  const dateLabel = body.action === 'receive' ? 'receipt' : 'transfer';
+  if (body.transaction_date != null) {
+    const date = body.transaction_date;
+    if (!['transfer', 'receive'].includes(body.action)) throw fail('A transaction date is only supported for receipts and kettle transfers.');
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !DateTime.fromISO(date).isValid || date > DateTime.now().setZone('Asia/Kolkata').toISODate()) {
+      throw fail(`Select a valid ${dateLabel} date on or before today.`);
+    }
+    result.transaction_date = date;
+  }
+  if (body.transaction_time != null) {
+    const time = body.transaction_time;
+    if (!['transfer', 'receive'].includes(body.action) || !result.transaction_date) throw fail(`Select a ${dateLabel} date before setting its time.`);
+    if (typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw fail(`Select a valid ${dateLabel} time.`);
+    const selected = DateTime.fromISO(`${result.transaction_date}T${time}`, { zone: 'Asia/Kolkata' });
+    if (selected > DateTime.now().setZone('Asia/Kolkata')) throw fail('Transaction date and time cannot be in the future.');
+    result.transaction_time = time;
+  }
   if (['initialize', 'adjust'].includes(body.action)) {
     result.plantGrams = grams(body.plant_kg, 'Plant stock', true);
     result.kettleGrams = grams(body.kettle_kg, 'Kettle stock', true);

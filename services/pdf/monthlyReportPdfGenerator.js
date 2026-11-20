@@ -2,6 +2,7 @@ const { PDFDocument, StandardFonts } = require('pdf-lib');
 const { loadCompanyLogo, drawReportFooters } = require('./reportBranding');
 const { createReportLayout } = require('./reportLayout');
 const { generateZincStockPdf } = require('./zincStockPdfGenerator');
+const { generateZincPurchasePdf } = require('./zincPurchasePdfGenerator');
 const fmt = value => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 const kg = value => `${fmt(value)} kg`;
 const money = value => `Rs ${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -35,9 +36,11 @@ async function generateMonthlyReportPdf(report) {
     { title: 'RECOVERY & EXPENSES', rows: [
       ['Ash collected', kg(byproducts.ash_weight_kg)], ['Dross collected', kg(byproducts.dross_weight_kg)],
       ['Recovered zinc', kg(byproducts.recovered_zinc_kg)], ['Recovery sale value incl. GST', money(byproducts.total_with_gst)],
+      ['Recovery (% of MS)', `${Number(production.total_ms_kg) > 0 ? (Number(byproducts.recovered_zinc_kg || 0) / Number(production.total_ms_kg) * 100).toFixed(2) : '0.00'}%`],
       ['Total daily expense', money(totals.total_expense)], ['Stock corrections / openings', fmt(zinc.corrections)],
     ] },
   ]);
+  layout.note('Ash and dross recovery (%) = recovered zinc / monthly MS production x 100. This reduces zinc consumption by that many percentage points.');
   layout.note('Zinc stock reconciles movements recorded within the month. Production uses operating dates. Batch quantities in the transaction section follow FIFO receipts through plant-to-kettle transfers.');
 
   layout.addPage();
@@ -70,6 +73,10 @@ async function generateMonthlyReportPdf(report) {
     includeFooter: false,
   }));
   for (const page of await pdf.copyPages(appendix, appendix.getPageIndices())) pdf.addPage(page);
+  if (report.zinc_purchases) {
+    const purchases = await PDFDocument.load(await generateZincPurchasePdf(report.zinc_purchases, { scopeLabel: report.period.label, includeFooter: false }));
+    for (const page of await pdf.copyPages(purchases, purchases.getPageIndices())) pdf.addPage(page);
+  }
   drawReportFooters(pdf, fonts, `Monthly operations | ${report.period.label}`);
   return Buffer.from(await pdf.save());
 }

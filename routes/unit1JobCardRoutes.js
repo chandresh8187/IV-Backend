@@ -1,17 +1,22 @@
+const { isPunchFace, sectionProfileForTemplate, expandPunchFaces } = require('../services/unit1SectionPunchFaces');
+const { isBeamPunchProfile } = require('../services/unit1BeamPunchProfiles');
+const {normalizeSelections,getSelections,saveSelections}=require('../services/unit1JobCoils');
+const { editJobCard } = require('../services/unit1EditJobCard');
 const router = require('express').Router();
 const db = require('../config/unit1Db');
 const access = require('../middleware/roleMiddleware');
 const { PRODUCTS, positiveId } = require('../services/unit1ProductionValidation');
 const { publishUnit1Change } = require('../services/unit1Realtime');
+const { generateJobCardPdf } = require('../services/pdf/unit1ProductionPdfGenerator');
 
-const columns = `j.id, j.job_date AS jobDate, j.customer_name AS customerName,
+const columns = `j.id, (SELECT pl.plan_id FROM unit1_production_plan_lines pl WHERE pl.job_card_id=j.id) AS planningId, (SELECT pl.template_id FROM unit1_production_plan_lines pl WHERE pl.job_card_id=j.id) AS templateId, j.job_date AS jobDate, j.customer_name AS customerName,
   j.project_name_capacity AS projectNameCapacity, j.production_qty AS productionQty,
   j.structure_type AS structureType, j.member_name AS memberName,
   j.section_size AS sectionSize, j.shift, j.cut_length_mm AS cutLengthMm,
   j.machine_id AS machineId, m.code AS machineCode, m.name AS machineName,
   j.planned_machine_id AS plannedMachineId, pm.code AS plannedMachineCode, pm.name AS plannedMachineName,
   j.material_type AS materialType, j.coil_width_mm AS coilWidthMm,
-  j.coil_thickness_mm AS coilThicknessMm, j.punch_size AS punchSize,
+  j.coil_thickness_mm AS coilThicknessMm,j.allowed_coil_sizes AS allowedCoilSizes, j.punch_size AS punchSize,
   j.status, j.archived_at AS archivedAt, j.created_at AS createdAt, j.updated_at AS updatedAt,
   COALESCE(p.producedPieces,0) AS producedPieces, COALESCE(p.runCount,0) AS runCount`;
 const joins = `FROM unit1_job_cards j LEFT JOIN unit1_machines m ON m.id=j.machine_id
@@ -23,6 +28,11 @@ const decimal = value => Number(value);
 const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
 function validate(body) {
+  try {
+    body = { ...body, holes: expandPunchFaces(body?.holes, sectionProfileForTemplate(body || {})) };
+  } catch (error) {
+    return { error: error.message };
+  }
   const stockCoilId = body?.stockCoilId == null || body.stockCoilId === '' ? null : positiveId(body.stockCoilId);
   const plannedMachineId = positiveId(body?.plannedMachineId);
   if (body?.stockCoilId != null && body.stockCoilId !== '' && !stockCoilId) return { error: 'Select a valid coil from stock.' };
@@ -44,17 +54,32 @@ function validate(body) {
   if (!['day', 'night'].includes(value.shift)) return { error: 'Select Day or Night shift.' };
   if (![value.cutLengthMm, value.coilWidthMm, value.coilThicknessMm].every(n => Number.isFinite(n) && n > 0 && n < 1000000)) return { error: 'Length, coil width and thickness must be positive numbers.' };
   if (!Array.isArray(body?.holes) || !body.holes.length || body.holes.length > 100) return { error: 'Add at least one hole position (maximum 100).' };
-  const holes = body.holes.map((hole, index) => ({ sequenceNo: index + 1, profile: String(hole?.profile || ''), punchSize: trim(hole?.punchSize || value.punchSize, 100), targetMm: decimal(hole?.targetMm) }));
-  if (holes.some((hole, index) => body.holes[index]?.targetMm === '' || body.holes[index]?.targetMm == null || !['l_flange', 'r_flange', 'web', 'lip'].includes(hole.profile) || !hole.punchSize || hole.punchSize.length > 100 || !Number.isFinite(hole.targetMm) || hole.targetMm < 0 || hole.targetMm > value.cutLengthMm)) return { error: 'Each hole needs a punch size, profile and position within cut length.' };
-  return { value: { ...value, stockCoilId, plannedMachineId, holes } };
+  const holes = body.holes.map((hole, index) => ({ sequenceNo: index + 1, punchName: hole.punchName, profile: value.structureType === 'w_beam_crash_barrier' ? (isBeamPunchProfile(hole.profile) ? hole.profile : 'beam') : String(hole?.profile || ''), punchSize: trim(hole?.punchSize || value.punchSize, 100), targetMm: decimal(hole?.targetMm) }));
+  if (holes.some((hole, index) => body.holes[index]?.targetMm === '' || body.holes[index]?.targetMm == null || !(value.structureType === 'w_beam_crash_barrier' ? isBeamPunchProfile(hole.profile) : isPunchFace(hole.profile, body.sectionProfile) && !isBeamPunchProfile(hole.profile)) || !hole.punchSize || hole.punchSize.length > 100 || !Number.isFinite(hole.targetMm) || hole.targetMm < 0 || hole.targetMm > value.cutLengthMm)) return { error: 'Each hole needs a punch size, profile and position within cut length.' };
+  try {
+    for (const [index, hole] of holes.entries()) {
+      const offset = body.holes[index].centerOffsetMm;
+      if (hole.profile === 'web' && offset != null && offset !== '') {
+        hole.centerOffsetMm = require('../services/unit1WebPunchOffset').parseCenterOffset(offset);
+      }
+    }
+    return { value: { ...value, stockCoilId, plannedMachineId, holes: require("../services/unit1PunchNames").withPunchNames(holes) } };
+  } catch (error) {
+    return {error:error.message};
+  }
 }
 
 async function getJob(id) {
   const [[job], [holes]] = await Promise.all([
-    db.execute(`SELECT ${columns} ${joins} WHERE j.id=?`, [id]),
-    db.execute('SELECT id, sequence_no AS sequenceNo, profile, punch_size AS punchSize, target_mm AS targetMm FROM unit1_job_card_holes WHERE job_card_id=? ORDER BY sequence_no', [id]),
+    db.execute(`SELECT ${columns}, (
+      SELECT JSON_UNQUOTE(JSON_EXTRACT(t.specification, '$.sectionProfile'))
+      FROM unit1_production_plan_lines l
+      JOIN unit1_material_templates t ON t.id=l.template_id
+      WHERE l.job_card_id=j.id
+    ) AS sectionProfile ${joins} WHERE j.id=?`, [id]),
+    db.execute('SELECT id, sequence_no AS sequenceNo, profile, punch_size AS punchSize,punch_name AS punchName, target_mm AS targetMm, center_offset_mm AS centerOffsetMm FROM unit1_job_card_holes WHERE job_card_id=? AND is_active=1 ORDER BY sequence_no', [id]),
   ]);
-  return job[0] ? { ...job[0], holes } : null;
+  return job[0] ? { ...job[0], allowedCoilSizes:require('../services/unit1AllowedCoilSizes').allowedCoilSizes(job[0]), holes,selectedCoils:await getSelections(db,id) } : null;
 }
 
 router.get('/', access([], 'unit1.production.view'), async (req, res, next) => {
@@ -69,15 +94,29 @@ router.get('/', access([], 'unit1.production.view'), async (req, res, next) => {
     if (status) { conditions.push('j.status=?'); params.push(status); }
     if (assignable) conditions.push("j.status='open' AND j.machine_id IS NULL");
     const machineId = positiveId(req.query.machineId);
-    if (machineId) { conditions.push('(j.planned_machine_id=? OR j.planned_machine_id IS NULL)'); params.push(machineId); }
+    if (machineId) { conditions.push('(j.machine_id=? OR (j.machine_id IS NULL AND j.planned_machine_id=?))'); params.push(machineId,machineId); }
     if (search) {
       conditions.push('(CAST(j.id AS CHAR) LIKE ? OR j.customer_name LIKE ? OR j.project_name_capacity LIKE ? OR j.member_name LIKE ? OR j.section_size LIKE ?)');
       params.push(...Array(5).fill(`%${search}%`));
     }
     const [jobs] = await db.query(`SELECT ${columns} ${joins} WHERE ${conditions.join(' AND ')} ORDER BY j.id DESC LIMIT 200`, params);
     const ids = jobs.map(job => job.id);
-    const [holes] = ids.length ? await db.query(`SELECT id, job_card_id AS jobCardId, sequence_no AS sequenceNo, profile, punch_size AS punchSize, target_mm AS targetMm FROM unit1_job_card_holes WHERE job_card_id IN (${ids.map(() => '?').join(',')}) ORDER BY sequence_no`, ids) : [[]];
-    res.json({ data: jobs.map(job => ({ ...job, holes: holes.filter(hole => hole.jobCardId === job.id) })) });
+    const [holes] = ids.length ? await db.query(`SELECT id, job_card_id AS jobCardId, sequence_no AS sequenceNo, profile, punch_size AS punchSize,punch_name AS punchName, target_mm AS targetMm, center_offset_mm AS centerOffsetMm FROM unit1_job_card_holes WHERE job_card_id IN (${ids.map(() => '?').join(',')}) AND is_active=1 ORDER BY sequence_no`, ids) : [[]];
+    const selected=await getSelections(db,ids);
+    res.json({data:jobs.map(job=>({...job,allowedCoilSizes:require('../services/unit1AllowedCoilSizes').allowedCoilSizes(job),holes:holes.filter(hole=>hole.jobCardId===job.id),selectedCoils:selected.filter(coil=>Number(coil.jobCardId)===Number(job.id))}))});
+  } catch (error) { next(error); }
+});
+
+router.get('/:id/pdf', access([], 'unit1.production.view'), async (req, res, next) => {
+  const id = positiveId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid job card ID.' });
+  if (req.user.role === 'labour') return res.status(403).json({ error: 'Job card reports are unavailable to Labour users.' });
+  try {
+    const job = await getJob(id);
+    if (!job) return res.status(404).json({ error: 'Job card not found.' });
+    const bytes = await generateJobCardPdf(job);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="unit1-job-card-${id}.pdf"`, 'Cache-Control': 'private, no-store' });
+    res.send(bytes);
   } catch (error) { next(error); }
 });
 
@@ -94,45 +133,34 @@ async function save(req, res, next) {
   const parsed = validate(req.body);
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const v = parsed.value;
+  let selectedCoils;
+  try{if(req.body.selectedCoils!==undefined||!id)selectedCoils=normalizeSelections(req.body.selectedCoils);}catch(error){return res.status(error.status||400).json({error:error.message});}
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
-    if (!id && !v.plannedMachineId) throw Object.assign(new Error('Select a planned machine for this job card.'), { status: 400 });
-    if (v.plannedMachineId) {
-      const [[plannedMachine]] = await connection.execute('SELECT id,is_active AS isActive FROM unit1_machines WHERE id=?', [v.plannedMachineId]);
-      if (!plannedMachine?.isActive) throw Object.assign(new Error('Select an active planned machine.'), { status: 409 });
-    }
-    if (v.stockCoilId) {
-      const [[coil]] = await connection.execute('SELECT id,status,coil_qty AS coilQty,material_type AS materialType,width_mm AS widthMm,thickness_mm AS thicknessMm FROM coils WHERE id=? FOR UPDATE', [v.stockCoilId]);
-      const [[used]] = await connection.execute("SELECT COUNT(DISTINCT coil_number) AS usedQty FROM unit1_production_runs WHERE coil_id=? AND status <> 'returned'", [v.stockCoilId]);
-      if (!coil || !['in_stock', 'allocated'].includes(coil.status) || Number(used.usedQty) >= Number(coil.coilQty)) throw Object.assign(new Error('Selected coil is no longer available in stock.'), { status: 409 });
-      v.materialType = coil.materialType;
-      v.coilWidthMm = Number(coil.widthMm);
-      v.coilThicknessMm = Number(coil.thicknessMm);
-    }
+    if (id) {const [[linked]]=await connection.execute('SELECT plan_id FROM unit1_production_plan_lines WHERE job_card_id=?',[id]);if(linked)throw Object.assign(new Error('Edit this material through Production Planning, or edit its reusable Job Card template.'),{status:409});}
+    if (id) await connection.execute('SELECT id FROM unit1_production_runs WHERE job_card_id=? FOR UPDATE', [id]);
     if (id) {
-      const [[job]] = await connection.execute('SELECT status,archived_at AS archivedAt,machine_id AS machineId,planned_machine_id AS plannedMachineId FROM unit1_job_cards WHERE id=? FOR UPDATE', [id]);
-      if (!job) throw Object.assign(new Error('Job card not found.'), { status: 404 });
-      if (job.archivedAt || !['open','completed'].includes(job.status)) throw Object.assign(new Error('Only active job cards can be edited.'), { status: 409 });
-      if (job.machineId && v.plannedMachineId && Number(job.machineId) !== Number(v.plannedMachineId)) throw Object.assign(new Error('Unassign this job card before changing its planned machine.'), { status: 409 });
-      const [[used]] = await connection.execute("SELECT COUNT(*) AS count, COALESCE(SUM(produced_pieces),0) AS pieces, SUM(status IN ('setup','running','paused')) AS activeCount FROM unit1_production_runs WHERE job_card_id=?", [id]);
-      if (Number(used.count)) {
-        if (v.productionQty < Number(used.pieces)) throw Object.assign(new Error('Production quantity cannot be less than pieces already produced.'), { status: 409 });
-        await connection.execute('UPDATE unit1_job_cards SET job_date=?,customer_name=?,project_name_capacity=?,production_qty=?,status=? WHERE id=?', [v.jobDate,v.customerName,v.projectNameCapacity,v.productionQty,v.productionQty === Number(used.pieces) ? 'completed' : 'open',id]);
-        await connection.commit();
-        publishUnit1Change(req, 'job-cards', { jobCardId: id, action: 'job_updated' });
-        return res.json({ data: await getJob(id) });
-      }
-      if (!v.plannedMachineId) throw Object.assign(new Error('Select a planned machine for this job card.'), { status: 400 });
-      await connection.execute(`UPDATE unit1_job_cards SET job_date=?,customer_name=?,project_name_capacity=?,production_qty=?,structure_type=?,member_name=?,section_size=?,shift=?,cut_length_mm=?,planned_machine_id=?,material_type=?,coil_width_mm=?,coil_thickness_mm=?,punch_size=? WHERE id=?`, [v.jobDate,v.customerName,v.projectNameCapacity,v.productionQty,v.structureType,v.memberName,v.sectionSize,v.shift,v.cutLengthMm,v.plannedMachineId,v.materialType,v.coilWidthMm,v.coilThicknessMm,v.punchSize,id]);
-      await connection.execute('DELETE FROM unit1_job_card_holes WHERE job_card_id=?', [id]);
+      const [[existingPlan]]=await connection.execute('SELECT planned_machine_id AS plannedMachineId FROM unit1_job_cards WHERE id=? FOR UPDATE',[id]);
+      v.plannedMachineId=existingPlan?.plannedMachineId||null;
+      await editJobCard(connection, id, v, req.user.id);
+      const nextSelection=selectedCoils?req.body.selectedCoils:await getSelections(connection,id);
+      if(nextSelection.length)await saveSelections(connection,id,nextSelection,v,req.user.id);
+
+      await connection.commit();
+      publishUnit1Change(req, 'job-cards', { jobCardId: id, action: 'job_updated' });
+      publishUnit1Change(req, 'production', { jobCardId: id, action: 'job_updated' });
+      return res.json({ data: await getJob(id) });
     } else {
-      const [insert] = await connection.execute(`INSERT INTO unit1_job_cards (job_date,customer_name,project_name_capacity,production_qty,structure_type,member_name,section_size,shift,cut_length_mm,machine_id,planned_machine_id,material_type,coil_width_mm,coil_thickness_mm,punch_size,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [v.jobDate,v.customerName,v.projectNameCapacity,v.productionQty,v.structureType,v.memberName,v.sectionSize,v.shift,v.cutLengthMm,null,v.plannedMachineId,v.materialType,v.coilWidthMm,v.coilThicknessMm,v.punchSize,req.user.id]);
+      const [insert] = await connection.execute(`INSERT INTO unit1_job_cards (job_date,customer_name,project_name_capacity,production_qty,structure_type,member_name,section_size,shift,cut_length_mm,machine_id,planned_machine_id,material_type,coil_width_mm,coil_thickness_mm,punch_size,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [v.jobDate,v.customerName,v.projectNameCapacity,v.productionQty,v.structureType,v.memberName,v.sectionSize,v.shift,v.cutLengthMm,null,null,v.materialType,v.coilWidthMm,v.coilThicknessMm,v.punchSize,req.user.id]);
       req.savedJobId = insert.insertId;
     }
     const jobId = id || req.savedJobId;
-    for (const hole of v.holes) await connection.execute('INSERT INTO unit1_job_card_holes (job_card_id,sequence_no,profile,punch_size,target_mm) VALUES (?,?,?,?,?)', [jobId,hole.sequenceNo,hole.profile,hole.punchSize,hole.targetMm]);
+    for (const hole of v.holes) await connection.execute('INSERT INTO unit1_job_card_holes (job_card_id,sequence_no,profile,punch_size,punch_name,target_mm,center_offset_mm) VALUES (?,?,?,?,?,?,?)', [jobId,hole.sequenceNo,hole.profile,hole.punchSize,hole.punchName||null,hole.targetMm,hole.centerOffsetMm ?? null]);
+    await saveSelections(connection,jobId,req.body.selectedCoils,v,req.user.id);
+    await require('../services/unit1Planning').linkLegacyJob(connection,jobId,req.user.id);
     await connection.commit();
+    publishUnit1Change(req,'production',{jobCardId:jobId,action:'job_assigned'});
     publishUnit1Change(req, 'job-cards', { jobCardId: jobId, action: id ? 'job_updated' : 'job_created' });
     res.status(id ? 200 : 201).json({ data: await getJob(jobId) });
   } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
@@ -152,7 +180,8 @@ router.delete('/:id', access([], 'unit1.jobcards.manage'), async (req, res, next
     if (job.archivedAt) throw Object.assign(new Error('This job card is already removed.'), { status: 409 });
     const [[history]] = await connection.execute("SELECT COUNT(*) AS count, SUM(status IN ('setup','running','paused')) AS activeCount FROM unit1_production_runs WHERE job_card_id=?", [jobId]);
     if (Number(history.activeCount)) throw Object.assign(new Error('Complete the active coil run before deleting this job card.'), { status: 409 });
-    if (Number(history.count)) {
+    const [[linkedPlan]]=await connection.execute('SELECT plan_id FROM unit1_production_plan_lines WHERE job_card_id=?',[jobId]);
+    if (Number(history.count) || linkedPlan) {
       await connection.execute('UPDATE unit1_job_cards SET archived_at=UTC_TIMESTAMP(3),machine_id=NULL WHERE id=?', [jobId]);
     } else {
       await connection.execute('DELETE FROM unit1_job_card_holes WHERE job_card_id=?', [jobId]);

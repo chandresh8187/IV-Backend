@@ -2,7 +2,7 @@ const router = require('express').Router();
 const db = require('../config/unit1Db');
 const auth = require('../middleware/unit1AuthMiddleware');
 const access = require('../middleware/roleMiddleware');
-const { ROLES, FIELDS, DEFAULT_FIELDS, normalizeFields, parseFields } = require('../services/unit1CoilQr');
+const { ROLES, SCAN_FIELDS, DEFAULT_SCAN_FIELDS, normalizeFields, parseFields } = require('../services/unit1CoilQr');
 const { publishUnit1Change } = require('../services/unit1Realtime');
 
 router.use(auth, access([], 'unit1.qr.settings'));
@@ -11,7 +11,7 @@ router.get('/', async (_req, res, next) => {
   try {
     const [rows] = await db.query('SELECT role, fields_json AS fields FROM unit1_qr_scan_role_fields');
     const saved = new Map(rows.map(row => [row.role, parseFields(row.fields)]));
-    res.json({ data: { roles: ROLES, fields: FIELDS, selections: Object.fromEntries(ROLES.map(role => [role, saved.get(role) || DEFAULT_FIELDS])) } });
+    res.json({ data: { roles: ROLES, fields: SCAN_FIELDS, selections: Object.fromEntries(ROLES.map(role => [role, saved.get(role) || DEFAULT_SCAN_FIELDS])) } });
   } catch (error) { next(error); }
 });
 

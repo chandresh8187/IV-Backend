@@ -24,6 +24,7 @@ function reportCells(row) {
     details.push('Usage less returns / corrections.');
     if (row.shift_name === 'unavailable') details.push('Legacy record: shift unavailable; date is recorded date.');
   } else {
+    if (['transfer', 'receive'].includes(row.movement_type) && row.transaction_date && row.transaction_date !== row.created_at?.slice(0, 10)) details.push(`Recorded: ${row.created_at}. Balances are the snapshot when saved.`);
     if (row.batch_number) details.push(`Batch: ${row.batch_number}`);
     if (row.invoice_number) details.push(`Invoice: ${row.invoice_number}`);
     if (row.zinc_rate_per_kg != null) details.push(`Purchase rate: Rs ${Number(row.zinc_rate_per_kg).toFixed(2)} / kg`);
@@ -41,7 +42,7 @@ function reportCells(row) {
   }
   const balance = value => summary || value == null ? '-' : `${kg(value)} kg`;
   return [
-    date(row.transaction_date || row.created_at), shift(row.shift_name), explanation,
+    `${date(row.transaction_date || row.created_at)}${['transfer', 'receive'].includes(row.movement_type) && row.transaction_time ? ` ${row.transaction_time}` : ''}`, shift(row.shift_name), explanation,
     ['initialize', 'adjust'].includes(row.movement_type) ? 'Balances set' : `${kg(Math.abs(Number(row.amount_kg)))} kg`,
     balance(row.plant_after_kg), balance(row.kettle_after_kg), details.join('\n') || '-',
   ];
@@ -71,9 +72,13 @@ async function generateZincStockPdf(rows, options = {}) {
   const logo = await loadCompanyLogo(pdf);
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const widths = [73, 47, 137, 75, 84, 84, 177.89];
+  const widths = [73, 47, 137, 75, 84, 84, 277.89];
   const headers = ['Date', 'Shift', 'Transaction', 'Quantity', 'Plant balance', 'Kettle balance', 'Batch / invoice allocation'];
   const size = 8, lineHeight = 11;
+  const grid = options.borderedTables === true;
+  const border = rgb(.25, .27, .32), borderLight = rgb(.65, .68, .73);
+  const centered = i => grid && [0, 1, 3, 4, 5].includes(i);
+  const cellX = (line, font, i, x) => centered(i) ? x + (widths[i] - font.widthOfTextAtSize(ascii(line), size)) / 2 : x + 6;
   let page, y;
   const text = (value, x, top, font = regular, fontSize = size, color = ink) =>
     page.drawText(ascii(value), { x, y: top, font, size: fontSize, color });
@@ -92,7 +97,7 @@ async function generateZincStockPdf(rows, options = {}) {
     ];
     totals.forEach(([label, amount], i) => {
       const x = 32 + i * 262;
-      page.drawRectangle({ x, y: top - 43, width: 252, height: 43, color: rgb(0.94, 0.97, 0.98) });
+      page.drawRectangle({ x, y: top - 43, width: 252, height: 43, color: rgb(0.94, 0.97, 0.98), ...(grid ? { borderColor: borderLight, borderWidth: .6 } : {}) });
       text(label, x + 10, top - 15, regular, 8, muted);
       text(`${kg(amount)} kg`, x + 10, top - 33, bold, 12);
     });
@@ -101,10 +106,19 @@ async function generateZincStockPdf(rows, options = {}) {
     text('FIFO batches: oldest receipts first, through plant-to-kettle transfers. Opening stock and unidentified stock are unreferenced.', 32, top - 85, regular, 8, muted);
       y = top - 104;
     }
-    page.drawRectangle({ x: 32, y: y - 23, width: 777.89, height: 25, color: ink });
+    const headerCells = headers.map((header, i) => wrap(header, bold, size, widths[i] - 12));
+    const headerHeight = grid ? Math.max(28, Math.max(...headerCells.map(cell => cell.length)) * lineHeight + 14) : 25;
+    if (!grid) page.drawRectangle({ x: 32, y: y - 23, width: 777.89, height: 25, color: ink });
     let x = 32;
-    headers.forEach((header, i) => { text(header, x + 6, y - 14, bold, 8, rgb(1, 1, 1)); x += widths[i]; });
-    y -= 25;
+    headers.forEach((header, i) => {
+      if (grid) {
+        page.drawRectangle({ x, y: y - headerHeight, width: widths[i], height: headerHeight, color: rgb(.95, .96, .98), borderColor: border, borderWidth: .6 });
+        const top = y - (headerHeight - headerCells[i].length * lineHeight) / 2 - 8;
+        headerCells[i].forEach((line, n) => text(line, cellX(line, bold, i, x), top - n * lineHeight, bold, size));
+      } else text(header, x + 6, y - 14, bold, 8, rgb(1, 1, 1));
+      x += widths[i];
+    });
+    y -= headerHeight;
   };
   addPage(true);
   rows.forEach((row, index) => {
@@ -121,20 +135,24 @@ async function generateZincStockPdf(rows, options = {}) {
       page.drawRectangle({ x: 32, y: y - height, width: 777.89, height, color: index % 2 ? rgb(0.96, 0.97, 0.98) : rgb(1, 1, 1) });
       let x = 32;
       cells.forEach((lines, i) => {
+        if (grid) page.drawRectangle({ x, y: y - height, width: widths[i], height, borderColor: borderLight, borderWidth: .45 });
         // Repeat identifying cells when one shift has more batches than fit on
         // a page. All allocation detail is retained on continuation pages.
         const visible = offset && i === 2 ? ['Allocation continued']
           : offset && i < 6 ? lines : lines.slice(offset, offset + count);
-        visible.forEach((line, n) => text(line, x + 6, y - 15 - n * lineHeight, i === 2 ? bold : regular));
+        visible.forEach((line, n) => text(line, cellX(line, i === 2 ? bold : regular, i, x), y - 15 - n * lineHeight, i === 2 ? bold : regular));
         x += widths[i];
       });
-      page.drawLine({ start: { x: 32, y: y - height }, end: { x: 809.89, y: y - height }, thickness: 0.4, color: rgb(0.86, 0.9, 0.92) });
+      if (!grid) page.drawLine({ start: { x: 32, y: y - height }, end: { x: 809.89, y: y - height }, thickness: 0.4, color: rgb(0.86, 0.9, 0.92) });
       y -= height;
       offset += count;
       if (offset < totalLines) addPage();
     }
   });
-  if (!rows.length) text('No zinc stock transactions have been recorded.', 38, y - 25);
+  if (!rows.length) {
+    if (grid) page.drawRectangle({ x: 32, y: y - 38, width: 777.89, height: 38, borderColor: borderLight, borderWidth: .45 });
+    text('No zinc stock transactions have been recorded.', 38, y - 25);
+  }
   if (options.includeFooter !== false) drawReportFooters(pdf, { regular, bold }, 'Zinc inventory ledger | Quantities in kg | Dates DD/MM/YYYY');
   return Buffer.from(await pdf.save());
 }

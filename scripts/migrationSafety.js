@@ -134,6 +134,12 @@ function validateMigrationSql(sql) {
     /^ALTER TABLE `?chemical_checks`? DROP CONSTRAINT IF EXISTS `?chk_acid_ph`?, ADD CONSTRAINT `?chk_acid_ph`? CHECK \(`?acid_ph`? BETWEEN -14 AND 14\)$/i.test(
       normalizedSql,
     );
+  // Exact expansion to the same numeric representation accepted by the API.
+  // This is not permission for arbitrary MODIFY statements or narrower types.
+  const isApprovedChemicalReadingExpansion =
+    /^ALTER TABLE chemical_checks MODIFY COLUMN flux_ph DOUBLE NOT NULL, MODIFY COLUMN flux_density DOUBLE NOT NULL, MODIFY COLUMN flux_temperature_c DOUBLE NULL, MODIFY COLUMN acid_ph DOUBLE NOT NULL, MODIFY COLUMN acid_density DOUBLE NOT NULL$/i.test(normalizedSql);
+  const isApprovedAcidPhLimitRemoval =
+    /^ALTER TABLE chemical_checks DROP CONSTRAINT IF EXISTS chk_acid_ph$/i.test(normalizedSql);
   const isApprovedLabourRole = /^ALTER TABLE `?users`? MODIFY COLUMN `?role`? ENUM\('','','','',''\) NOT NULL$/i.test(normalizedSql);
   for (const rule of DESTRUCTIVE_PATTERNS) {
     if (
@@ -152,6 +158,14 @@ function validateMigrationSql(sql) {
       ) &&
       !(
         isApprovedAcidPhConstraintChange &&
+        rule.reason === "DROP operations are not allowed"
+      ) &&
+      !(
+        isApprovedChemicalReadingExpansion &&
+        rule.reason === "CHANGE/MODIFY can rewrite existing column data"
+      ) &&
+      !(
+        isApprovedAcidPhLimitRemoval &&
         rule.reason === "DROP operations are not allowed"
       ) &&
       !(

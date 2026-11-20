@@ -7,14 +7,15 @@ const { getConfiguredCurrentFinancialYear } = require('../services/financialYear
 const { buildReport: buildExpenseReport } = require('./expenseReportController');
 const { checkStockAlerts, ZINC_LIMIT_KG } = require('../services/stockAlertService');
 const { zincMovementLedgerSql, buildZincMovementReport } = require('../services/zincMovementReportService');
+const { recordPurchase } = require('../services/zincPurchaseService');
 
 const readFinancialYearAverageRate = async (queryable = db) => {
   const year = await getConfiguredCurrentFinancialYear(queryable);
   const [rows] = await queryable.query(`SELECT ROUND(AVG(zinc_rate_per_kg), 2) AS average_zinc_rate,
     COUNT(zinc_rate_per_kg) AS rate_count
-    FROM zinc_stock_movements
-    WHERE movement_type = 'receive' AND zinc_rate_per_kg IS NOT NULL AND zinc_rate_per_kg > 0
-      AND DATE(created_at) BETWEEN ? AND ?`, [year.start_date, year.end_date]);
+    FROM zinc_purchases
+    WHERE zinc_rate_per_kg IS NOT NULL AND zinc_rate_per_kg > 0
+      AND transaction_date BETWEEN ? AND ?`, [year.start_date, year.end_date]);
   return {
     average_zinc_rate: rows[0]?.average_zinc_rate == null ? null : Number(rows[0].average_zinc_rate),
     rate_count: Number(rows[0]?.rate_count || 0),
@@ -88,7 +89,7 @@ const getZincMovements = async (req, res) => {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 200);
     const offset = (page - 1) * limit;
     const [ledger] = await db.query(zincMovementLedgerSql);
-    const rows = buildZincMovementReport(ledger).rows;
+    const rows = buildZincMovementReport(ledger).rows.filter(row => row.movement_type !== 'receive');
     return res.json({ success: true, data: rows.slice(offset, offset + limit), pagination: { page, limit, has_more: rows.length > offset + limit } });
   } catch (error) { return sendError(res, error); }
 };
@@ -96,7 +97,7 @@ const getZincMovements = async (req, res) => {
 const downloadZincMovementsPdf = async (req, res) => {
   try {
     const [ledger] = await db.query(zincMovementLedgerSql);
-    const pdf = await generateZincStockPdf(buildZincMovementReport(ledger).rows);
+    const pdf = await generateZincStockPdf(buildZincMovementReport(ledger).rows.filter(row => row.movement_type !== 'receive'));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', pdf.length);
     res.setHeader('Content-Disposition', 'inline; filename="zinc-stock-report.pdf"');
@@ -136,18 +137,28 @@ const saveZincMovement = async (req, res) => {
       return res.json({ success: true, message: 'Stock movement already saved.', data: serializeStock(rows[0]) });
     }
     const next = applyMovement(rows[0], movement);
-    const nextRate = movement.action === 'receive'
+    let nextRate = movement.action === 'receive'
       ? movement.zincRatePerKg
       : rows[0].current_zinc_rate;
+    if (movement.action === 'receive' && movement.transaction_date) {
+      // A late-entered older receipt must not replace a more recent purchase rate.
+      const [laterReceipts] = await connection.query(`SELECT zinc_rate_per_kg FROM zinc_stock_movements
+        WHERE movement_type = 'receive' AND zinc_rate_per_kg > 0
+          AND TIMESTAMP(COALESCE(transaction_date, DATE(created_at)), COALESCE(transaction_time, TIME(created_at))) > TIMESTAMP(?, ?)
+        ORDER BY COALESCE(transaction_date, DATE(created_at)) DESC, COALESCE(transaction_time, TIME(created_at)) DESC, id DESC LIMIT 1`,
+      [movement.transaction_date, movement.transaction_time || '00:00:00']);
+      if (laterReceipts.length) nextRate = Number(laterReceipts[0].zinc_rate_per_kg);
+    }
     await connection.query(`UPDATE zinc_stock SET initialized = 1, plant_kg = ?, kettle_kg = ?,
       kg_per_mm = ?, current_zinc_rate = ?, revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`,
     [next.plant_kg, next.kettle_kg, next.kg_per_mm, nextRate, next.revision]);
-    await connection.query(`INSERT INTO zinc_stock_movements
-      (request_id, request_hash, movement_type, amount_kg, zinc_rate_per_kg, plant_after_kg, kettle_after_kg, note, actor_user_id, batch_number, invoice_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const [savedMovement] = await connection.query(`INSERT INTO zinc_stock_movements
+      (request_id, request_hash, movement_type, amount_kg, zinc_rate_per_kg, plant_after_kg, kettle_after_kg, note, actor_user_id, batch_number, invoice_number, transaction_date, transaction_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [movement.request_id, hash, movement.action, (movement.amountGrams || 0) / 1000,
       movement.zincRatePerKg || null, next.plant_kg, next.kettle_kg, movement.note, req.user.id,
-      movement.batch_number || null, movement.invoice_number || null]);
+      movement.batch_number || null, movement.invoice_number || null, movement.transaction_date || null, movement.transaction_time || null]);
+    if (movement.action === 'receive') await recordPurchase(connection, savedMovement.insertId);
     await connection.commit();
     transaction = false;
     checkStockAlerts().catch(error => console.error('Stock alert check failed:', error));

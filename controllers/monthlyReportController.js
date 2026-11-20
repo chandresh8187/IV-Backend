@@ -4,6 +4,7 @@ const { financialYearMonth, summarizeZincMovements } = require('../services/mont
 const { normalizeExpenseSettings, calculateExpenseReport } = require('../services/expenseReportService');
 const { generateMonthlyReportPdf } = require('../services/pdf/monthlyReportPdfGenerator');
 const { generateDailyProductionPdf } = require('../services/pdf/dailyProductionPdfGenerator');
+const { detailTitles, generateMonthlyDetailPdf } = require('../services/pdf/monthlyDetailPdfGenerator');
 const { zincMovementLedgerSql, buildZincMovementReport } = require('../services/zincMovementReportService');
 
 const numeric = rows => rows.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value])));
@@ -62,17 +63,31 @@ const buildMonthlyReport = async ({ month, financialYearId }) => {
   const production = numeric(productionResult[0])[0];
   const byproducts = numeric(byproductsResult[0])[0];
   const zincReport = buildZincMovementReport(movementsResult[0], { period });
-  const movements = zincReport.rows;
-  const zinc = summarizeZincMovements(zincReport.recorded_movements, openingResult[0][0]);
+  const movements = zincReport.rows.filter(row => row.movement_type !== 'receive');
+  const zinc = summarizeZincMovements(zincReport.recorded_movements, zincReport.opening_balance || openingResult[0][0]);
+  zinc.closing_plant_kg = zincReport.closing_balance.plant_after_kg;
+  zinc.closing_kettle_kg = zincReport.closing_balance.kettle_after_kg;
   const receipt = gasReceiptResult[0][0];
   const gasRate = receipt ? Number((Number(receipt.price_per_bottle) / Number(receipt.kg_per_bottle)).toFixed(2)) : 0;
   const expenseSettings = { ...(historicalSettingsResult[0][0] || settingsResult[0][0]), gas_bottle_rate: gasRate };
   const expenses = calculateExpenseReport({ settings: normalizeExpenseSettings(expenseSettings), production: { total_ms_kg: production.total_ms_kg, total_gi_kg: production.total_gi_kg, production_days: production.production_days }, stock: { plant_kg: zinc.closing_plant_kg }, purchasedZincKg: zinc.received_kg, recoveredZincKg: byproducts.recovered_zinc_kg });
-  return { financial_year: { id: year.id, name: year.financial_year }, period, production: { ...production, gross_zinc_kg: Math.max(0, production.total_gi_kg-production.total_ms_kg), net_zinc_kg: expenses.totals.net_zinc_consumed_kg, zinc_consumption_percent: expenses.totals.average_zinc_consumption_percent }, daily_production: numeric(dailyResult[0]), shifts: numeric(shiftsResult[0]), materials: numeric(materialsResult[0]), contractors: numeric(contractorsResult[0]), planning: numeric(planningResult[0]), zinc, zinc_movements: movements, byproducts, expenses };
+  return { financial_year: { id: year.id, name: year.financial_year }, period, production: { ...production, gross_zinc_kg: Math.max(0, production.total_gi_kg-production.total_ms_kg), net_zinc_kg: expenses.totals.net_zinc_consumed_kg, zinc_consumption_percent: expenses.totals.average_zinc_consumption_percent }, daily_production: numeric(dailyResult[0]), shifts: numeric(shiftsResult[0]), materials: numeric(materialsResult[0]), contractors: numeric(contractorsResult[0]), planning: numeric(planningResult[0]), zinc, zinc_movements: movements, zinc_purchases: zincReport.rows.filter(row => row.movement_type === 'receive'), byproducts, expenses };
 };
 
 const sendError = (res,error) => res.status(error.status||500).json({success:false,message:error.status?error.message:'Could not generate the monthly report.'});
 const getMonthlyReport = async (req,res) => { try{return res.json({success:true,data:await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id})});}catch(error){console.error(error);return sendError(res,error);} };
 const downloadMonthlyReportPdf = async (req,res) => { try{const report=await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id});const pdf=await generateMonthlyReportPdf(report);res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',pdf.length);res.setHeader('Content-Disposition',`inline; filename="monthly-report-${report.period.from.slice(0,7)}.pdf"`);return res.end(pdf);}catch(error){return sendError(res,error);} };
 const downloadDailyProductionPdf = async (req,res) => { try{const report=await buildMonthlyReport({month:req.query.month,financialYearId:req.query.financial_year_id});const pdf=await generateDailyProductionPdf(report);res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Length',pdf.length);res.setHeader('Content-Disposition',`inline; filename="daily-production-${report.period.from.slice(0,7)}.pdf"`);return res.end(pdf);}catch(error){console.error(error);return sendError(res,error);} };
-module.exports={buildMonthlyReport,getMonthlyReport,downloadMonthlyReportPdf,downloadDailyProductionPdf};
+const downloadMonthlyDetailPdf = async (req, res) => {
+  try {
+    const type = req.params.type;
+    if (!Object.hasOwn(detailTitles, type)) return res.status(400).json({ success: false, message: 'Select a valid monthly report list.' });
+    const report = await buildMonthlyReport({ month: req.query.month, financialYearId: req.query.financial_year_id });
+    const pdf = await generateMonthlyDetailPdf(report, type);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdf.length);
+    res.setHeader('Content-Disposition', `inline; filename="monthly-${type}-${report.period.from.slice(0, 7)}.pdf"`);
+    return res.end(pdf);
+  } catch (error) { return sendError(res, error); }
+};
+module.exports={buildMonthlyReport,getMonthlyReport,downloadMonthlyReportPdf,downloadDailyProductionPdf,downloadMonthlyDetailPdf};

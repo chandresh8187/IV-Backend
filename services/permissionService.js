@@ -1,31 +1,41 @@
 const db = require("../config/db");
+const { machineRoleAccess } = require('./unit1MachineAccess');
 
 const ALL_ROLES = ["superadmin", "plant_manager", "admin", "supervisor"];
 
 const PERMISSIONS = [
-  { key: 'unit1.coils.view', group: 'Unit 1 Coil Stock', label: 'View Unit 1 coils', description: 'View Unit 1 coil stock and inward records.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
-  { key: 'unit1.coils.create', group: 'Unit 1 Coil Stock', label: 'Record Unit 1 coil inward', description: 'Add received coils to Unit 1 stock.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
-  { key: 'unit1.coils.edit', group: 'Unit 1 Coil Stock', label: 'Edit coil inward', description: 'Correct received coil details.', defaultRoles: ['superadmin', 'production_manager'] },
-  { key: 'unit1.coils.delete', group: 'Unit 1 Coil Stock', label: 'Delete coil inward', description: 'Remove an unused coil stock record.', defaultRoles: ['superadmin'] },
-  { key: 'unit1.coils.scan', group: 'Unit 1 Coil Stock', label: 'Scan Unit 1 coil QR', description: 'View role-filtered details after scanning a coil QR code.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
-  { key: 'unit1.qr.settings', group: 'Unit 1 Coil Stock', label: 'Manage QR scan fields', description: 'Choose which coil details appear for each role when a QR code is scanned.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key:'unit1.maintenance.view', group:'Unit 1 Maintenance', label:'View maintenance and reports', description:'View schedules, reminders, service history and PDFs.', defaultRoles:[...ALL_ROLES,'production_manager'] },
+  { key:'unit1.maintenance.manage', group:'Unit 1 Maintenance', label:'Manage maintenance schedules and corrections', description:'Set schedules and audit corrections to service history.', defaultRoles:['superadmin','production_manager','plant_manager','admin'] },
+  { key:'unit1.maintenance.record', group:'Unit 1 Maintenance', label:'Record machine maintenance', description:'Record actual services, parts, costs and downtime.', defaultRoles:[...ALL_ROLES,'production_manager'] },
+  { key: 'unit1.material-stock.view', group: 'Unit 1 Material Stock', label: 'View finished material stock', description: 'View material quantities in nos and their source history.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
+  { key: 'unit1.material-stock.manage', group: 'Unit 1 Material Stock', label: 'Add material opening stock', description: 'Record stock not already included in production bundles.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager'] },
+  { key: 'unit1.material-stock.transfer', group: 'Unit 1 Material Stock', label: 'Transfer material to another party', description: 'Transfer available material quantities while preserving original production and coil traceability.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager'] },
+  { key: 'unit1.material-stock.dispatch', group: 'Unit 1 Material Stock', label: 'Dispatch material stock', description: 'Dispatch finished stock to Unit 2 or another destination with an audited report.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager'] },
+  { key: 'unit1.coils.view', group: 'Unit 1 Coil QR Generator', label: 'View Unit 1 coils', description: 'View saved coil QR records and physical coil identifiers.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
+  { key: 'unit1.coils.create', group: 'Unit 1 Coil QR Generator', label: 'Generate Unit 1 coil QR', description: 'Save coil type, grade, size, quantity and rate; generate unique coil QR labels.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'unit1.coils.edit', group: 'Unit 1 Coil QR Generator', label: 'Edit coil inward', description: 'Correct received coil details.', defaultRoles: ['superadmin', 'production_manager'] },
+  { key: 'unit1.coils.delete', group: 'Unit 1 Coil QR Generator', label: 'Delete coil inward', description: 'Remove an unused coil stock record.', defaultRoles: ['superadmin'] },
+  { key: 'unit1.coils.scan', group: 'Unit 1 Coil QR Generator', label: 'Scan Unit 1 coil QR', description: 'View role-filtered details after scanning a coil QR code.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
+  { key: 'unit1.qr.settings', group: 'Unit 1 Coil QR Generator', label: 'Manage QR scan fields', description: 'Choose which coil, material and party details appear for each role when a QR code is scanned.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'unit1.machines.view', group: 'Unit 1 Machines', label: 'View Unit 1 machines', description: 'View machines available for Unit 1 production.', defaultRoles: [...ALL_ROLES, 'production_manager'] },
   { key: 'unit1.machines.manage', group: 'Unit 1 Machines', label: 'Manage Unit 1 machines', description: 'Add, edit, activate, and deactivate Unit 1 machines.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'unit1.shifts.view', group: 'Unit 1 Shifts', label: 'View Unit 1 shift schedule', description: 'View automatic shift times and the currently active shift.', defaultRoles: [...ALL_ROLES, 'production_manager', 'labour'] },
   { key: 'unit1.shifts.manage', group: 'Unit 1 Shifts', label: 'Manage Unit 1 shift schedule', description: 'Set the automatic Day and Night shift boundaries.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager'] },
   { key: 'unit1.production.view', group: 'Unit 1 Production', label: 'View Unit 1 live production', description: 'View current roll forming runs and output.', defaultRoles: [...ALL_ROLES, 'production_manager', 'labour'] },
-  { key: 'unit1.production.operate', group: 'Unit 1 Production', label: 'Operate Unit 1 live production', description: 'Start, pause, resume, complete runs and record pieces.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
-  { key: 'unit1.jobcards.manage', group: 'Unit 1 Production', label: 'Manage Unit 1 job cards', description: 'Create, edit and remove production job cards while preserving recorded output.', defaultRoles: ['superadmin', 'production_manager'] },
-  { key: 'unit1.jobcards.assign', group: 'Unit 1 Production', label: 'Assign job cards to machines', description: 'Assign an open job card to its planned machine.', defaultRoles: ['superadmin', 'production_manager', 'supervisor'] },
-  { key: 'unit1.jobcards.unassign', group: 'Unit 1 Production', label: 'Unassign job cards', description: 'Release a machine after its active coil run is removed or completed.', defaultRoles: ['superadmin', 'production_manager'] },
-  { key: 'unit1.production.coil.assign', group: 'Unit 1 Production', label: 'Scan and assign coils', description: 'Scan a matching coil into an assigned machine.', defaultRoles: ['superadmin', 'production_manager', 'supervisor'] },
-  { key: 'unit1.production.coil.remove', group: 'Unit 1 Production', label: 'Unassign or return coils', description: 'Remove an unapproved setup coil or return a partly used running or paused coil to stock.', defaultRoles: ['superadmin', 'production_manager', 'supervisor'] },
-  { key: 'unit1.production.supervise', group: 'Unit 1 Production', label: 'Supervise Unit 1 production', description: 'Approve first-piece checks, repeat hole measurements during active runs, and control runs.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
-  { key: 'unit1.production.bundle', group: 'Unit 1 Production', label: 'Record Unit 1 bundles', description: 'Record produced pieces by bundle after first-piece approval.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor', 'labour'] },
+  { key: 'unit1.production.operate', group: 'Unit 1 Production', label: 'Operate Unit 1 live production', description: 'Pause, resume and complete machine runs.', defaultRoles: ['superadmin', 'plant_manager'] },
+  { key: 'unit1.jobcards.manage', group: 'Unit 1 Production', label: 'Manage Unit 1 job cards', description: 'Create, edit and remove production job cards while preserving recorded output.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager'] },
+  { key: 'unit1.jobcards.assign', group: 'Unit 1 Production', label: 'Assign job cards to machines', description: 'Assign an open job card to its planned machine.', defaultRoles: ['superadmin', 'plant_manager', 'production_manager'] },
+  { key: 'unit1.jobcards.unassign', group: 'Unit 1 Production', label: 'Unassign job cards', description: 'Release a machine after its active coil run is removed or completed.', defaultRoles: ['superadmin', 'plant_manager', 'production_manager'] },
+  { key: 'unit1.production.coil.assign', group: 'Unit 1 Production', label: 'Scan and assign coils', description: 'Scan a coil QR and validate width/thickness against the planning template.', defaultRoles: ['superadmin', 'plant_manager', 'production_manager','supervisor'] },
+  { key: 'unit1.production.coil.assign.manual', group: 'Unit 1 Production', label: 'Assign coil by Coil ID', description: 'On: scan a QR or enter a Coil ID. Off: scan the coil QR to assign it.', defaultRoles: ['superadmin', 'plant_manager', 'production_manager', 'supervisor'] },
+  { key: 'unit1.production.coil.remove', group: 'Unit 1 Production', label: 'Unassign or return coils', description: 'Remove an unapproved setup coil or return a partly used running or paused coil to stock.', defaultRoles: ['superadmin', 'plant_manager', 'production_manager'] },
+  { key: 'unit1.production.supervise', group: 'Unit 1 Production', label: 'Record Unit 1 quality inspections', description: 'Supervisors, plant managers and superadmins verify first-piece cut length, section size and hole dimensions, and record repeat hole checks.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'unit1.production.bundle', group: 'Unit 1 Production', label: 'Record Unit 1 bundles', description: 'Supervisors, plant managers and superadmins record produced pieces after first-piece approval.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'unit1.production.edit', group: 'Unit 1 Production', label: 'Edit production entries', description: 'Correct recorded bundle quantities, coil usage and stock with a saved correction reason. Superadmin always has access.', defaultRoles: ['superadmin'] },
   { key: 'unit1.users.view', group: 'Unit 1 Users', label: 'View Unit 1 users', description: 'View the Unit 1 user directory.', defaultRoles: ['superadmin', 'production_manager', 'plant_manager', 'admin'] },
   { key: 'unit1.users.labour.assign', group: 'Unit 1 Users', label: 'Assign labour to machines', description: 'Assign or unassign a Labour user to an active production machine.', defaultRoles: ['superadmin', 'production_manager'] },
   { key: 'unit1.users.manage', group: 'Unit 1 Users', label: 'Manage Unit 1 users and access', description: 'Create and edit Unit 1 accounts and feature permissions.', defaultRoles: ['superadmin'] },
-  { key: 'unit1.materials.manage', group: 'Unit 1 Coil Stock', label: 'Manage Unit 1 material grades', description: 'Add, edit, and delete allowed grades for Unit 1 materials.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
+  { key: 'unit1.materials.manage', group: 'Unit 1 Coil QR Generator', label: 'Manage Unit 1 material grades', description: 'Add, edit, and delete allowed grades for Unit 1 materials.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'gas.view', group: 'Gas Management', label: 'View gas management', description: 'View bottle inventory, vaporizer positions, consumption, and production efficiency.', defaultRoles: ALL_ROLES },
   { key: 'gas.manage', group: 'Gas Management', label: 'Manage gas bottle stock', description: 'Receive bottles, record filled weights and start gas supply.', defaultRoles: ['superadmin', 'plant_manager'] },
   { key: 'gas.operate', group: 'Gas Management', label: 'Start and switch gas bottles', description: 'Record bottle start, finish, remaining gas, and the next running position.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
@@ -49,6 +59,7 @@ const PERMISSIONS = [
   { key: 'monthly_reports.report', group: 'Monthly Reports', label: 'Generate monthly report PDF', description: 'Generate and share a consolidated monthly operations PDF.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'chemical_checks.view', group: 'Chemical Tracking', label: 'View chemical checks', description: 'View daily flux temperature and flux and acid pH and density readings.', defaultRoles: ALL_ROLES },
   { key: 'chemical_checks.manage', group: 'Chemical Tracking', label: 'Record chemical checks', description: 'Record daily flux temperature and flux and acid pH and density readings.', defaultRoles: ['superadmin', 'plant_manager', 'supervisor'] },
+  { key: 'chemical_checks.edit', group: 'Chemical Tracking', label: 'Edit chemical checks', description: 'Correct existing flux and acid readings, inspection dates, and notes.', defaultRoles: ['superadmin'] },
   { key: 'chemical_checks.report', group: 'Chemical Tracking', label: 'Generate chemical checks PDF', description: 'Generate and share the flux and acid readings report.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'rate_calculator.view', group: 'Production', label: 'Use rate calculator', description: 'Calculate zinc consumption cost and final production rate.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
   { key: 'contractors.view', group: 'Contractors', label: 'View contractor production', description: 'View contractor shift assignments and production totals.', defaultRoles: ['superadmin', 'plant_manager', 'admin'] },
@@ -86,6 +97,8 @@ const getPermissionDefinition = (key) => PERMISSION_BY_KEY.get(String(key || "")
 const isDefaultAllowed = (role, key) => {
   const normalizedRole = normalizeRole(role);
   if (normalizedRole === "superadmin") return true;
+  const machineAccess = machineRoleAccess(normalizedRole, key);
+  if (machineAccess !== undefined) return machineAccess;
   return Boolean(getPermissionDefinition(key)?.defaultRoles.includes(normalizedRole));
 };
 
@@ -103,6 +116,8 @@ const hasPermission = async ({ userId, role, permissionKey, queryable = db }) =>
 
   const definition = getPermissionDefinition(permissionKey);
   if (!definition) throw new Error(`Unknown permission key: ${permissionKey}`);
+  const machineAccess = machineRoleAccess(normalizedRole, permissionKey);
+  if (machineAccess !== undefined) return machineAccess;
 
   const [rows] = await queryable.query(
     `SELECT allowed FROM user_permission_overrides
@@ -135,7 +150,9 @@ const getUserAccess = async ({ userId, role, queryable = db, scope = 'unit2' }) 
       default_allowed: defaultAllowed,
       override,
       allowed:
-        normalizedRole === "superadmin"
+        machineRoleAccess(normalizedRole, permission.key) !== undefined
+          ? machineRoleAccess(normalizedRole, permission.key)
+          : normalizedRole === "superadmin"
           ? true
           : override == null
             ? defaultAllowed

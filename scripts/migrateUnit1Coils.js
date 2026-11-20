@@ -1,6 +1,7 @@
 require('dotenv-flow').config({ silent: true });
 const db = require('../config/unit1Db');
 const { holeScrapKg } = require('../services/unit1MaterialWeight');
+const { historicalJobSql } = require('../services/unit1JobHistory');
 
 const additions = [
   ['rate_per_kg', 'DECIMAL(10,2) NULL AFTER actual_net_kg'],
@@ -13,6 +14,8 @@ const additions = [
 ];
 
 async function migrateUnit1Coils() {
+  // Repair legacy/imported material keys before any density joins or backfills.
+  await require('./migrateUnit1MaterialCollation').migrateUnit1MaterialCollation(db);
   await db.query(`CREATE TABLE IF NOT EXISTS unit1_material_densities (
     material_type VARCHAR(20) NOT NULL PRIMARY KEY,
     density_g_cm3 DECIMAL(7,4) NOT NULL,
@@ -134,6 +137,8 @@ async function migrateUnit1Coils() {
     UNIQUE KEY uq_unit1_machine_code (code),
     KEY idx_unit1_machines_active_name (is_active, name)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  const [machineBladeColumn] = await db.query("SHOW COLUMNS FROM unit1_machines LIKE 'cut_blade_size_mm'");
+  if (!machineBladeColumn.length) await db.query('ALTER TABLE unit1_machines ADD COLUMN cut_blade_size_mm DECIMAL(9,3) NULL');
   const [assignedMachineColumns] = await db.query("SHOW COLUMNS FROM users LIKE 'assigned_machine_id'");
   if (!assignedMachineColumns.length) await db.query('ALTER TABLE users ADD COLUMN assigned_machine_id BIGINT UNSIGNED NULL AFTER assigned_shift');
   const [assignedMachineIndexes] = await db.query("SHOW INDEX FROM users WHERE Key_name = 'idx_unit1_user_assigned_machine'");
@@ -194,6 +199,7 @@ async function migrateUnit1Coils() {
     CONSTRAINT fk_unit1_job_machine FOREIGN KEY (machine_id) REFERENCES unit1_machines(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   await db.query('ALTER TABLE unit1_job_cards MODIFY machine_id BIGINT UNSIGNED NULL');
+  await require('../services/unit1CoilCode').migrateCoilCodes(db);
   const [plannedMachineColumns] = await db.query("SHOW COLUMNS FROM unit1_job_cards LIKE 'planned_machine_id'");
   if (!plannedMachineColumns.length) await db.query('ALTER TABLE unit1_job_cards ADD COLUMN planned_machine_id BIGINT UNSIGNED NULL AFTER machine_id');
   const [plannedMachineIndexes] = await db.query("SHOW INDEX FROM unit1_job_cards WHERE Key_name = 'idx_unit1_job_planned_machine'");
@@ -205,14 +211,19 @@ async function migrateUnit1Coils() {
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     job_card_id BIGINT UNSIGNED NOT NULL,
     sequence_no INT UNSIGNED NOT NULL,
-    profile ENUM('l_flange','r_flange','web','lip') NOT NULL,
+    profile ENUM('l_flange','r_flange','web','lip','beam','w_panel_1','w_panel_2','w_panel_3','w_panel_4','w_panel_5','w_panel_6','w_panel_7','w_panel_8','w_panel_9','l_lip','r_lip') NOT NULL,
     punch_size VARCHAR(100) NULL,
     target_mm DECIMAL(10,2) NOT NULL,
+    center_offset_mm DECIMAL(8,3) NULL,
     UNIQUE KEY uq_unit1_job_hole_sequence (job_card_id,sequence_no),
     CONSTRAINT fk_unit1_job_hole_job FOREIGN KEY (job_card_id) REFERENCES unit1_job_cards(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   const [holeColumns] = await db.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'unit1_job_card_holes'");
+  if (!holeColumns.some(row => row.COLUMN_NAME === 'center_offset_mm')) await db.query('ALTER TABLE unit1_job_card_holes ADD COLUMN center_offset_mm DECIMAL(8,3) NULL');
+  const [[holeProfile]] = await db.query("SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='unit1_job_card_holes' AND COLUMN_NAME='profile'");
+  if (!["'w_panel_9'", "'l_lip'", "'r_lip'"].every(face => String(holeProfile?.type).includes(face))) await db.query("ALTER TABLE unit1_job_card_holes MODIFY profile ENUM('l_flange','r_flange','web','lip','beam','w_panel_1','w_panel_2','w_panel_3','w_panel_4','w_panel_5','w_panel_6','w_panel_7','w_panel_8','w_panel_9','l_lip','r_lip') NOT NULL");
   if (!holeColumns.some(row => row.COLUMN_NAME === 'punch_size')) await db.query('ALTER TABLE unit1_job_card_holes ADD COLUMN punch_size VARCHAR(100) NULL AFTER profile');
+  if (!holeColumns.some(row => row.COLUMN_NAME === 'is_active')) await db.query('ALTER TABLE unit1_job_card_holes ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1');
   const [runColumns] = await db.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'unit1_production_runs'");
   const runNames = new Set(runColumns.map(row => row.COLUMN_NAME));
   if (!runNames.has('job_card_id')) await db.query('ALTER TABLE unit1_production_runs ADD COLUMN job_card_id BIGINT UNSIGNED NULL, ADD KEY idx_unit1_run_job (job_card_id), ADD CONSTRAINT fk_unit1_run_job FOREIGN KEY (job_card_id) REFERENCES unit1_job_cards(id)');
@@ -268,38 +279,75 @@ async function migrateUnit1Coils() {
   if (!bundleColumns.some(row => row.COLUMN_NAME === 'shift_date')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN shift_date DATE NULL AFTER shift');
   if (!bundleColumns.some(row => row.COLUMN_NAME === 'theoretical_used_kg')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN theoretical_used_kg DECIMAL(14,4) NULL AFTER pieces');
   if (!bundleColumns.some(row => row.COLUMN_NAME === 'density_g_cm3')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN density_g_cm3 DECIMAL(7,4) NULL AFTER theoretical_used_kg');
+  if (!bundleColumns.some(row => row.COLUMN_NAME === 'job_snapshot')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN job_snapshot LONGTEXT NULL');
   if (!bundleColumns.some(row => row.COLUMN_NAME === 'hole_scrap_kg')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN hole_scrap_kg DECIMAL(14,4) NULL AFTER density_g_cm3');
-  await db.query(`UPDATE unit1_production_bundles b
+  if (!bundleColumns.some(row => row.COLUMN_NAME === 'cut_blade_size_mm')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN cut_blade_size_mm DECIMAL(9,3) NULL');
+  if (!bundleColumns.some(row => row.COLUMN_NAME === 'cut_blade_scrap_kg')) await db.query('ALTER TABLE unit1_production_bundles ADD COLUMN cut_blade_scrap_kg DECIMAL(14,4) NULL');
+  await require('./migrateUnit1ProductionCorrections').migrateUnit1ProductionCorrections(db);
+  await db.query(historicalJobSql(`UPDATE unit1_production_bundles b
     JOIN unit1_production_runs r ON r.id=b.run_id
     JOIN coils c ON c.id=r.coil_id
     JOIN unit1_job_cards j ON j.id=r.job_card_id
     JOIN unit1_material_densities d ON d.material_type=c.material_type
     SET b.density_g_cm3=d.density_g_cm3,
         b.theoretical_used_kg=ROUND(c.width_mm*c.thickness_mm*j.cut_length_mm*b.pieces*d.density_g_cm3/1000000,4)
-    WHERE b.theoretical_used_kg IS NULL AND c.width_mm>0 AND c.thickness_mm>0 AND j.cut_length_mm>0`);
+    WHERE b.theoretical_used_kg IS NULL AND c.width_mm>0 AND c.thickness_mm>0 AND j.cut_length_mm>0`));
   const [unmeasuredBundles] = await db.query(`SELECT b.id,b.pieces,b.density_g_cm3 AS densityGcm3,
     c.thickness_mm AS thicknessMm,j.id AS jobCardId,j.punch_size AS punchSize
     FROM unit1_production_bundles b JOIN unit1_production_runs r ON r.id=b.run_id
     JOIN coils c ON c.id=r.coil_id JOIN unit1_job_cards j ON j.id=r.job_card_id
-    WHERE b.hole_scrap_kg IS NULL`);
+    WHERE b.hole_scrap_kg IS NULL AND b.job_snapshot IS NULL`);
   const holesByJob = new Map();
   for (const bundle of unmeasuredBundles) {
     if (!holesByJob.has(bundle.jobCardId)) {
-      const [holes] = await db.execute('SELECT COALESCE(punch_size, ?) AS punchSize FROM unit1_job_card_holes WHERE job_card_id=? ORDER BY sequence_no', [bundle.punchSize, bundle.jobCardId]);
+      const [holes] = await db.execute('SELECT COALESCE(punch_size, ?) AS punchSize FROM unit1_job_card_holes WHERE job_card_id=? AND is_active=1 ORDER BY sequence_no', [bundle.punchSize, bundle.jobCardId]);
       holesByJob.set(bundle.jobCardId, holes);
     }
     const scrapKg = holeScrapKg({ holes: holesByJob.get(bundle.jobCardId), thicknessMm: bundle.thicknessMm, pieces: bundle.pieces, densityGcm3: bundle.densityGcm3 });
     if (scrapKg !== null) await db.execute('UPDATE unit1_production_bundles SET hole_scrap_kg=? WHERE id=?', [Number(scrapKg.toFixed(4)), bundle.id]);
   }
+  await require('./migrateUnit1HoleReports').migrateUnit1HoleReports(db);
   await db.query(`INSERT INTO unit1_hole_checks (run_id,check_type,checked_by,checked_at)
     SELECT hc.run_id,'first_piece',MIN(hc.checked_by),MIN(hc.checked_at)
     FROM unit1_run_hole_checks hc LEFT JOIN unit1_hole_checks c ON c.run_id=hc.run_id AND c.check_type='first_piece'
     WHERE c.id IS NULL GROUP BY hc.run_id`);
   await db.query(`INSERT IGNORE INTO unit1_hole_check_measurements (check_id,job_card_hole_id,measured_mm)
     SELECT c.id,hc.job_card_hole_id,hc.measured_mm FROM unit1_run_hole_checks hc
-    JOIN unit1_hole_checks c ON c.run_id=hc.run_id AND c.check_type='first_piece'`);
+    JOIN unit1_hole_checks c ON c.run_id=hc.run_id AND c.check_type='first_piece' WHERE c.report_snapshot IS NULL`);
   await db.query(`UPDATE unit1_production_bundles b JOIN unit1_hole_checks c ON c.run_id=b.run_id AND c.check_type='first_piece'
     SET b.hole_check_id=c.id WHERE b.hole_check_id IS NULL`);
+  await require('./migrateUnit1MaterialStock').migrateUnit1MaterialStock(db);
+  await require('./migrateUnit1Maintenance').migrateUnit1Maintenance(db);
+  await db.query(`CREATE TABLE IF NOT EXISTS unit1_job_card_revisions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    job_card_id BIGINT UNSIGNED NOT NULL,
+    actor_user_id BIGINT UNSIGNED NOT NULL,
+    before_data LONGTEXT NOT NULL,
+    after_data LONGTEXT NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    KEY idx_unit1_job_revisions (job_card_id,created_at),
+    CONSTRAINT fk_unit1_revision_job FOREIGN KEY (job_card_id) REFERENCES unit1_job_cards(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await require('./migrateUnit1CoilStock').migrateUnit1CoilStock(db);
+  await require('./migrateUnit1StockQr').migrateUnit1StockQr(db);
+  await require('../services/unit1PhysicalCoils').migratePhysicalCoils(db);
+  await require('./migrateUnit1JobCoils').migrateJobCoils(db);
+  await db.query(`CREATE TABLE IF NOT EXISTS unit1_coil_revisions (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+ coil_id BIGINT UNSIGNED NOT NULL,actor_user_id BIGINT UNSIGNED NOT NULL,
+ before_data LONGTEXT NOT NULL,after_data LONGTEXT NOT NULL,
+ created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ KEY idx_unit1_coil_revisions(coil_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  await require('./migrateUnit1QrWorkflow').migrateQrWorkflow(db);
+  await require('./migrateUnit1Planning').migrateUnit1Planning(db);
+  await require('./migrateUnit1QrWorkflow').migrateQrSizes(db);
+  await require('./migrateUnit1PunchNames').migrateUnit1PunchNames(db);
+  await require('./migrateUnit1CoilInvoices').migrateUnit1CoilInvoices(db);
+  await require('./migrateUnit1Vendors').migrateUnit1Vendors(db);
+  await require('./migrateUnit1StockCards').migrateUnit1StockCards(db);
+  await require('./migrateUnit1DispatchNotes').migrateUnit1DispatchNotes(db);
+  await require('./migrateUnit1MaterialTransfers').migrateUnit1MaterialTransfers(db);
 }
 
 if (require.main === module) {

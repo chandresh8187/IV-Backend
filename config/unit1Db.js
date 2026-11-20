@@ -6,6 +6,7 @@ const unit1Db = mysql.createPool({
   user: process.env.UNIT1_DB_USER || process.env.DB_USER,
   password: process.env.UNIT1_DB_PASSWORD ?? process.env.DB_PASSWORD,
   database: process.env.UNIT1_DB_NAME || 'ivs1_production',
+  charset: 'utf8mb4_unicode_ci',
   waitForConnections: true,
   connectionLimit: 10,
   decimalNumbers: true,

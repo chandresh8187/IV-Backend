@@ -68,7 +68,8 @@ test('Unit 1 clean SQL imports, matches migrations, and supports the complete co
     const statements = sql.replace(/^--.*$/gm, '').replace('USE `u436685010_iv1_app`', `USE \`${scratch}\``).split(/;\s*(?:\r?\n|$)/).map(s => s.trim()).filter(Boolean);
     for (const statement of statements) await connection.query(statement);
     const initial = await definitions();
-    assert.equal(Object.keys(initial).length, 17);
+    const declaredTables = [...sql.matchAll(/^CREATE TABLE(?: IF NOT EXISTS)?\s+`?([a-z0-9_]+)`?/gm)].map(match => match[1]);
+    assert.deepEqual(Object.keys(initial).sort(), declaredTables.sort(), 'Every table declared by the current clean schema is imported');
     for (const [table, expected] of [['unit1_material_densities', 4], ['unit1_material_grades', 5], ['unit1_shift_settings', 1], ['users', 1], ['coils', 0], ['unit1_fcm_tokens', 0]]) {
       const [[row]] = await connection.query(`SELECT COUNT(*) AS count FROM \`${table}\``);
       assert.equal(Number(row.count), expected, table);
@@ -113,11 +114,19 @@ test('Unit 1 clean SQL imports, matches migrations, and supports the complete co
     await call(production, 'post', '/verify-coil', { body: input });
     const first = (await call(production, 'post', '/runs', { body: input }, 201)).data;
     assert.equal(Number(first.coilRatePerKg), 62.75);
-    await call(coils, 'put', '/:id', { params: { id: String(coil.id) }, body: { ...editInward, ratePerKg: '63.00' } }, 409);
+    const correctedRate = (await call(coils, 'put', '/:id', { params: { id: String(coil.id) }, body: { ...editInward, ratePerKg: '63.00' } })).data;
+    assert.equal(Number(correctedRate.ratePerKg), 63);
+    await call(coils, 'put', '/:id', { params: { id: String(coil.id) }, body: { ...editInward, ratePerKg: '62.75' } });
     const legacyEdit = (await call(coils, 'put', '/:id', { params: { id: String(coil.id) }, body: editInward })).data;
     assert.equal(Number(legacyEdit.ratePerKg), 62.75);
-    const approve = id => call(production, 'post', '/runs/:id/hole-check', { params: { id: String(id) }, body: { approved: true, measurements: job.holes.map(hole => ({ holeId: hole.id, measuredMm: 20 })) } });
+    const approve = id => call(production, 'post', '/runs/:id/hole-check', { params: { id: String(id) }, body: { approved: true, measuredCutLengthMm: 1000, measuredSectionSize: '100', measurements: job.holes.map(hole => ({ holeId: hole.id, measuredMm: 20 })) } });
+    await assert.rejects(call(production, 'post', '/runs/:id/hole-check', { params: { id: String(first.id) }, body: { approved: true, measurements: job.holes.map(hole => ({ holeId: hole.id, measuredMm: 20 })) } }), { status: 400 });
+    const [[unapproved]] = await connection.execute('SELECT status FROM unit1_production_runs WHERE id=?', [first.id]);
+    assert.equal(unapproved.status, 'setup');
     await approve(first.id);
+    const [[firstInspection]] = await connection.execute('SELECT report_snapshot AS snapshot FROM unit1_hole_checks WHERE run_id=?', [first.id]);
+    assert.equal(JSON.parse(firstInspection.snapshot).measuredCutLengthMm, 1000);
+    assert.equal(JSON.parse(firstInspection.snapshot).measuredSectionSize, '100');
     await call(production, 'post', '/runs/:id/bundles', { params: { id: String(first.id) }, body: { pieces: 100 } });
     const returned = (await call(production, 'post', '/runs/:id/return-coil', { params: { id: String(first.id) } })).data;
     assert.equal(returned.status, 'returned');
@@ -141,7 +150,7 @@ test('Unit 1 clean SQL imports, matches migrations, and supports the complete co
     assert.ok(history.entries.every(entry => Number(entry.coilRatePerKg) === 62.75));
     await call(production, 'get', '/live');
     await call(production, 'get', '/machines/:machineId/entries', { params: { machineId: String(machine.id) } });
-    console.log('Verified 17 tables, system seeds, migration parity, login, settings, inward, QR, job assignment, approval, bundles, return/reinsert, completion, usage and history.');
+    console.log('Verified current schema, system seeds, migration parity, login, settings, inward, QR, job assignment, full first-piece approval, bundles, return/reinsert, completion, usage and history.');
   } finally {
     await connection.rollback();
     if (created && /^codex_unit1_import_[a-f0-9]{12}$/.test(scratch)) await connection.query(`DROP DATABASE \`${scratch}\``);

@@ -4,3 +4,7 @@ node_modules
 uploads/
 firebase-ser.json
 firebase-unit1*.json
+
+# Generated local report previews and server check logs
+/tmp/
+/backend-start-check.log

@@ -19,13 +19,13 @@ async function loadCompanyLogo(pdf) {
   try { return await pdf.embedPng(bytes); } catch { return null; }
 }
 
-function drawCompanyIdentity(page, fonts, logo, margin = 30) {
+function drawCompanyIdentity(page, fonts, logo, margin = 30, addressLines = COMPANY_ADDRESS_LINES) {
   const { width, height } = page.getSize();
   const top = height - margin;
   const available = width - margin * 2 - 150;
   const nameSize = Math.min(15, available / fonts.bold.widthOfTextAtSize(COMPANY_NAME, 1));
   page.drawText(COMPANY_NAME, { x: margin, y: top - 30, size: nameSize, font: fonts.bold, color: REPORT_COLORS.navy });
-  COMPANY_ADDRESS_LINES.forEach((line, index) => {
+  addressLines.forEach((line, index) => {
     const size = Math.min(7, available / fonts.regular.widthOfTextAtSize(line, 1));
     page.drawText(line, { x: margin, y: top - 42 - index * 9, size, font: fonts.regular, color: REPORT_COLORS.muted });
   });
@@ -41,8 +41,8 @@ function drawCompanyIdentity(page, fonts, logo, margin = 30) {
   return top - 72;
 }
 
-function drawReportHeader(page, fonts, logo, { title, subtitle, margin = 32 } = {}) {
-  drawCompanyIdentity(page, fonts, logo, margin);
+function drawReportHeader(page, fonts, logo, { title, subtitle, margin = 32, addressLines } = {}) {
+  drawCompanyIdentity(page, fonts, logo, margin, addressLines);
   const { width, height } = page.getSize();
   const top = height - margin;
   const text = cleanReportText(title);

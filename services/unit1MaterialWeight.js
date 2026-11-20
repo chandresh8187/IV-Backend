@@ -10,6 +10,15 @@ function theoreticalWeightKg({ widthMm, thicknessMm, lengthMm, pieces = 1, densi
 
 function roundKg(value) { return Math.round((Number(value) + Number.EPSILON) * 1000) / 1000; }
 
+function productionWeightKg({ cutBladeSizeMm, cutBladeThicknessMm, ...piece }) {
+  const blankKg = theoreticalWeightKg(piece);
+  const bladeKg = cutBladeSizeMm == null ? null : Number(cutBladeSizeMm) === 0 ? 0 : theoreticalWeightKg({
+    ...piece, thicknessMm: cutBladeThicknessMm, lengthMm: cutBladeSizeMm,
+  });
+  const usedKg = blankKg == null || (cutBladeSizeMm != null && bladeKg == null) ? null : blankKg + (bladeKg ?? 0);
+  return { blankKg, bladeKg, usedKg };
+}
+
 function punchAreaMm2(rawSize) {
   const size = String(rawSize ?? '').trim().replace(/\s*mm\s*$/i, '').trim();
   const slot = size.match(/^(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)$/i);
@@ -39,4 +48,4 @@ function holeScrapKg({ holes, thicknessMm, pieces = 1, densityGcm3 = DEFAULT_DEN
   return areaMm2 * values[0] * values[1] * values[2] / 1_000_000;
 }
 
-module.exports = { DEFAULT_DENSITY, MATERIAL_TYPES, theoreticalWeightKg, punchAreaMm2, holeScrapKg, roundKg };
+module.exports = { DEFAULT_DENSITY, MATERIAL_TYPES, theoreticalWeightKg, productionWeightKg, punchAreaMm2, holeScrapKg, roundKg };

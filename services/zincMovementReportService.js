@@ -4,20 +4,45 @@ const zincMovementLedgerSql = `SELECT m.id, m.movement_type, m.amount_kg, m.zinc
   m.plant_after_kg, m.kettle_after_kg, m.note, m.batch_number, m.invoice_number,
   m.production_entry_id, u.name AS actor_name,
   DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+  DATE_FORMAT(m.transaction_date, '%Y-%m-%d') AS transaction_date,
+  TIME_FORMAT(m.transaction_time, '%H:%i') AS transaction_time,
   DATE_FORMAT(COALESCE(m.shift_date, p.shift_date), '%Y-%m-%d') AS shift_date,
   COALESCE(m.shift_name, p.shift_name) AS shift_name
   FROM zinc_stock_movements m
   LEFT JOIN production_entries p ON p.id = m.production_entry_id
   LEFT JOIN users u ON u.id = m.actor_user_id ORDER BY m.id`;
 
+const movementDate = row => ['transfer', 'receive'].includes(row.movement_type) && row.transaction_date
+  ? row.transaction_date : row.created_at.slice(0, 10);
+
+// Keep the immutable recording-order ledger and FIFO allocations intact. Move
+// only dated receipt/transfer deltas across month boundaries, never their saved snapshots.
+function balanceAt(rows, boundary, inclusive = false) {
+  const before = date => inclusive ? date <= boundary : date < boundary;
+  let plant = 0, kettle = 0;
+  for (const row of rows) {
+    if (before(row.created_at.slice(0, 10))) {
+      plant = Math.round(Number(row.plant_after_kg || 0) * 1000);
+      kettle = Math.round(Number(row.kettle_after_kg || 0) * 1000);
+    }
+  }
+  for (const row of rows) {
+    if (!['transfer', 'receive'].includes(row.movement_type) || !row.transaction_date) continue;
+    const delta = (Number(before(movementDate(row))) - Number(before(row.created_at.slice(0, 10)))) * Math.round(Number(row.amount_kg) * 1000);
+    if (row.movement_type === 'receive') plant += delta;
+    else { plant -= delta; kettle += delta; }
+  }
+  return { plant_after_kg: plant / 1000, kettle_after_kg: kettle / 1000 };
+}
+
 function buildZincMovementReport(rows, { period } = {}) {
   const traced = traceZincBatches(rows), result = [], groups = new Map();
   const recordedMovements = traced.movements.filter(row => !period ||
-    (row.created_at.slice(0, 10) >= period.from && row.created_at.slice(0, 10) <= period.to));
+    (movementDate(row) >= period.from && movementDate(row) <= period.to));
   for (const row of recordedMovements) {
     const recordedDate = row.created_at.slice(0, 10);
     if (!['production_use', 'production_restore'].includes(row.movement_type)) {
-      result.push({ ...row, transaction_date: recordedDate, shift_name: null, movement_count: 1 });
+      result.push({ ...row, transaction_date: movementDate(row), shift_name: null, movement_count: 1 });
       continue;
     }
     const date = row.shift_date || recordedDate, shift = row.shift_name || 'unavailable', key = `${date}:${shift}`;
@@ -46,6 +71,7 @@ function buildZincMovementReport(rows, { period } = {}) {
     });
   }
   return { rows: result.sort((a, b) => Number(b.id) - Number(a.id)),
-    recorded_movements: recordedMovements, batch_balances: traced.batch_balances };
+    recorded_movements: recordedMovements, batch_balances: traced.batch_balances,
+    ...(period ? { opening_balance: balanceAt(traced.movements, period.from), closing_balance: balanceAt(traced.movements, period.to, true) } : {}) };
 }
 module.exports = { zincMovementLedgerSql, buildZincMovementReport };

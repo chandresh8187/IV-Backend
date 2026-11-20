@@ -2,6 +2,8 @@ const roundMoney = value => Math.round(Number(value) * 100) / 100;
 const roundKg = value => Math.round(Number(value) * 1000) / 1000;
 
 const number = (value, label, allowZero = false) => {
+  // Forms send empty strings for the byproduct that was not entered.
+  if (allowZero && typeof value === 'string' && value.trim() === '') return 0;
   if (!['string', 'number'].includes(typeof value) || String(value).trim() === '') {
     throw Object.assign(new Error(`${label} is required.`), { status: 400 });
   }

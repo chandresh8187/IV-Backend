@@ -1,5 +1,5 @@
 function publishUnit1Change(req, resource, details = {}) {
-  const room = req.app.get('io')?.to('unit1:production');
+  const room = req.app.get('io')?.to(resource === 'maintenance' ? 'unit1:maintenance' : 'unit1:production');
   if (!room) return;
   const event = { resource, ...details, at: new Date().toISOString() };
   room.emit('unit1:data:changed', event);

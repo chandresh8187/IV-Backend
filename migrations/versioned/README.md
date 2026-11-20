@@ -17,3 +17,5 @@ The destructive exception is the one-time, exact removal of
 All notification token writes and reads use the multi-device table.
 
 For a populated table, add a nullable column or provide a safe default. Never edit or delete a migration after it has been applied; add another migration instead.
+
+Chemical readings have two exact exceptions: expanding the five reading columns to DOUBLE (keeping their nullability) and removing only chk_acid_ph, so signed readings are not limited by the old acid pH range. Other column changes and constraint removals remain blocked.

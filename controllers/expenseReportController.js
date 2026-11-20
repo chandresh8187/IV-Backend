@@ -38,7 +38,7 @@ const buildReport = async monthValue => {
       FROM production_entries WHERE shift_date BETWEEN ? AND ? AND COALESCE(row_type, 'entry') = 'entry'`, [period.from, period.to]),
     db.query('SELECT plant_kg FROM zinc_stock WHERE id = 1'),
     db.query(`SELECT ROUND(COALESCE(SUM(amount_kg), 0), 3) purchased_zinc_kg
-      FROM zinc_stock_movements WHERE movement_type = 'receive' AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)`, [period.from, period.to]),
+      FROM zinc_purchases WHERE transaction_date BETWEEN ? AND ?`, [period.from, period.to]),
     db.query(`SELECT ROUND(COALESCE(SUM(recovered_zinc_kg), 0), 3) recovered_zinc_kg
       FROM zinc_byproduct_transactions WHERE transaction_date BETWEEN ? AND ?`, [period.from, period.to]),
   ]);

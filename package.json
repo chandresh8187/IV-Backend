@@ -24,20 +24,20 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "dotenv-flow": "^4.1.0",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.6.1",
-    "firebase-admin": "^14.2.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.1",
+    "firebase-admin": "^14.5.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "luxon": "^3.7.2",
-    "multer": "^2.2.0",
-    "mysql2": "^3.22.3",
+    "multer": "^2.5.0",
+    "mysql2": "^3.24.6",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^2.4.5",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
-    "nodemon": "^1.14.10"
+    "nodemon": "^3.1.14",
+    "pdf-parse": "^2.4.5"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -47,7 +47,6 @@
   },
   "allowScripts": {
     "@firebase/util@1.15.1": true,
-    "protobufjs@7.6.5": true,
-    "nodemon@1.19.4": true
+    "protobufjs@7.6.6": true
   }
 }

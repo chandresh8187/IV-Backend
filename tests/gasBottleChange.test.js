@@ -21,6 +21,8 @@ function fixture({ priorPeriod = false } = {}) {
   const earlier = { id: 9, bottle_id: 1, position_no: 1, started_at: '2026-10-01 08:00:00', finished_at: '2026-10-01 09:00:00', production_ton: 2 };
   const query = async (sql, params = []) => {
     assert.equal((sql.match(/\?/g) || []).length, params.length, sql);
+    if (sql.startsWith('SELECT DISTINCT bottle_id')) return [[]];
+    if (sql.startsWith('SELECT id,finished_at FROM gas_bottle_runs')) return [[]];
     if (sql.startsWith('SELECT * FROM gas_bottles')) return [bottles];
     if (sql.startsWith('SELECT id FROM gas_bottle_runs WHERE finished_at IS NULL')) return [[]];
     if (sql.startsWith('SELECT MAX(finished_at)')) return [[{ last_finished: '2026-10-01 09:00:00' }]];

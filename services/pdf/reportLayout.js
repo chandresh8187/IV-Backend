@@ -1,4 +1,5 @@
 const { REPORT_COLORS: C, cleanReportText, drawReportHeader } = require('./reportBranding');
+const { rgb } = require('pdf-lib');
 
 function wrapReportText(value, font, size, width) {
   const lines = [];
@@ -16,8 +17,10 @@ function wrapReportText(value, font, size, width) {
   return lines;
 }
 
-function createReportLayout(pdf, fonts, logo, { title, subtitle, margin = 32 }) {
+function createReportLayout(pdf, fonts, logo, { title, subtitle, margin = 32, borderedTables = false }) {
   const width = 841.89 - margin * 2, bottom = 50;
+  const gridHeader = rgb(.25, .27, .32);
+  const gridBody = rgb(.65, .68, .73);
   let page, y;
   const draw = (value, x, baseline, size = 9, font = fonts.regular, color = C.text) => {
     page.drawText(cleanReportText(value), { x, y: baseline, size, font, color });
@@ -37,7 +40,8 @@ function createReportLayout(pdf, fonts, logo, { title, subtitle, margin = 32 }) 
       const cellWidth = (width - (columns - 1) * 10) / columns;
       items.slice(start, start + columns).forEach(([label, value], index) => {
         const x = margin + index * (cellWidth + 10);
-        page.drawRectangle({ x, y: y - cellHeight, width: cellWidth, height: cellHeight, color: C.pale });
+        page.drawRectangle({ x, y: y - cellHeight, width: cellWidth, height: cellHeight, color: C.pale,
+          ...(borderedTables ? { borderColor: gridBody, borderWidth: .6 } : {}) });
         wrapReportText(label, fonts.regular, 8, cellWidth - 20).forEach((line, i) => draw(line, x + 10, y - 15 - i * 10, 8, fonts.regular, C.muted));
         const text = cleanReportText(value), size = Math.min(18, (cellWidth - 20) / fonts.bold.widthOfTextAtSize(text || '-', 1));
         draw(text, x + 10, y - cellHeight + 17, size, fonts.bold, C.navy);
@@ -65,15 +69,29 @@ function createReportLayout(pdf, fonts, logo, { title, subtitle, margin = 32 }) 
   };
   const table = (label, columns, rows = []) => {
     const widths = columns.map(column => width * column.weight / columns.reduce((sum, col) => sum + col.weight, 0));
+    const alignedX = (text, font, size, x, cellWidth, align) => {
+      const textWidth = font.widthOfTextAtSize(text, size);
+      return align === 'right' ? x + cellWidth - 8 - textWidth : align === 'center' ? x + (cellWidth - textWidth) / 2 : x + 8;
+    };
+    const headerCells = columns.map((column, i) => wrapReportText(column.title, fonts.bold, 8, widths[i] - 16));
+    const headerHeight = borderedTables ? Math.max(26, Math.max(...headerCells.map(cell => cell.length)) * 11 + 14) : 23;
     const header = continued => {
-      section(label + (continued ? ' (CONTINUED)' : ''), 85);
-      page.drawRectangle({ x: margin, y: y - 23, width, height: 23, color: C.pale });
+      section(label + (continued ? ' (CONTINUED)' : ''), headerHeight + 62);
+      page.drawRectangle({ x: margin, y: y - headerHeight, width, height: headerHeight, color: C.pale });
       let x = margin;
-      columns.forEach((column, i) => { draw(column.title, x + 8, y - 15, 8, fonts.bold, C.navy); x += widths[i]; });
-      y -= 23;
+      columns.forEach((column, i) => {
+        if (borderedTables) {
+          page.drawRectangle({ x, y: y - headerHeight, width: widths[i], height: headerHeight, color: C.pale, borderColor: gridHeader, borderWidth: .6 });
+          const top = y - (headerHeight - headerCells[i].length * 11) / 2 - 8;
+          headerCells[i].forEach((line, n) => draw(line, alignedX(line, fonts.bold, 8, x, widths[i], column.align), top - n * 11, 8, fonts.bold, C.navy));
+        } else draw(column.title, x + 8, y - 15, 8, fonts.bold, C.navy);
+        x += widths[i];
+      });
+      y -= headerHeight;
     };
     header(false);
     if (!rows.length) {
+      if (borderedTables) page.drawRectangle({ x: margin, y: y - 30, width, height: 30, borderColor: gridBody, borderWidth: .45 });
       draw('No records for this period.', margin + 8, y - 18, 9, fonts.regular, C.muted);
       y -= 40;
       return;
@@ -91,13 +109,13 @@ function createReportLayout(pdf, fonts, logo, { title, subtitle, margin = 32 }) 
         if (index % 2 === 0) page.drawRectangle({ x: margin, y: y - height, width, height, color: C.pale });
         let x = margin;
         columns.forEach((column, i) => {
+          if (borderedTables) page.drawRectangle({ x, y: y - height, width: widths[i], height, borderColor: gridBody, borderWidth: .45 });
           cells[i].slice(offset, offset + count).forEach((line, n) => {
-            const textWidth = fonts.regular.widthOfTextAtSize(line, 8.5);
-            draw(line, column.align === 'right' ? x + widths[i] - 8 - textWidth : x + 8, y - 17 - n * 11, 8.5);
+            draw(line, alignedX(line, fonts.regular, 8.5, x, widths[i], column.align), y - 17 - n * 11, 8.5);
           });
           x += widths[i];
         });
-        page.drawLine({ start: { x: margin, y: y - height }, end: { x: margin + width, y: y - height }, thickness: .3, color: C.line });
+        if (!borderedTables) page.drawLine({ start: { x: margin, y: y - height }, end: { x: margin + width, y: y - height }, thickness: .3, color: C.line });
         y -= height;
         offset += count;
         if (offset < totalLines) { addPage(); header(true); }

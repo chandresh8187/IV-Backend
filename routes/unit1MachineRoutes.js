@@ -5,7 +5,7 @@ const access = require('../middleware/roleMiddleware');
 const { normalizeMachine } = require('../services/unit1MachineValidation');
 const { publishUnit1Change } = require('../services/unit1Realtime');
 
-const columns = 'id, code, name, description, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt';
+const columns = 'id, code, name, description, cut_blade_size_mm AS cutBladeSizeMm, (SELECT s.id FROM unit1_maintenance_sessions s WHERE s.active_machine_id=unit1_machines.id) AS maintenanceId, is_active AS isActive, created_at AS createdAt, updated_at AS updatedAt';
 
 router.use(auth);
 
@@ -22,7 +22,7 @@ router.post('/', access([], 'unit1.machines.manage'), async (req, res, next) => 
   if (result.error) return res.status(400).json({ error: result.error });
   const machine = result.value;
   try {
-    const [insert] = await db.execute('INSERT INTO unit1_machines (code, name, description, is_active) VALUES (?, ?, ?, ?)', [machine.code, machine.name, machine.description, machine.isActive]);
+    const [insert] = await db.execute('INSERT INTO unit1_machines (code, name, description, is_active, cut_blade_size_mm) VALUES (?, ?, ?, ?, ?)', [machine.code, machine.name, machine.description, machine.isActive, machine.cutBladeSizeMm ?? null]);
     const [rows] = await db.execute(`SELECT ${columns} FROM unit1_machines WHERE id = ?`, [insert.insertId]);
     publishUnit1Change(req, 'machines', { machineId: insert.insertId, action: 'created' });
     res.status(201).json({ data: { ...rows[0], isActive: Boolean(rows[0].isActive) } });
@@ -45,8 +45,8 @@ router.put('/:id', access([], 'unit1.machines.manage'), async (req, res, next) =
       if (runs.length) { await connection.rollback(); return res.status(409).json({ error: 'Complete the open production run before deactivating this machine.' }); }
     }
     await connection.execute(
-      'UPDATE unit1_machines SET name = ?, description = ?, is_active = COALESCE(?, is_active) WHERE id = ?',
-      [machine.name, machine.description, machine.isActive ?? null, req.params.id],
+      'UPDATE unit1_machines SET name = ?, description = ?, is_active = COALESCE(?, is_active), cut_blade_size_mm = IF(?, ?, cut_blade_size_mm) WHERE id = ?',
+      [machine.name, machine.description, machine.isActive ?? null, Object.hasOwn(machine, 'cutBladeSizeMm'), machine.cutBladeSizeMm ?? null, req.params.id],
     );
     await connection.commit();
     const [rows] = await db.execute(`SELECT ${columns} FROM unit1_machines WHERE id = ?`, [req.params.id]);

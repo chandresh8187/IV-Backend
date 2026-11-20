@@ -1,0 +1,9 @@
+# Punch names: A-E
+
+Job Card template forms in Unit 1 app and web now select PUNCH A-E before punch size and absolute hole positions. `punchName` is saved independently from size, so different names may share a size. A given name must have the same size across profiles. Saved names pass through planning, first-piece/recheck inspection, details and PDFs. Name corrections use the existing audited, atomic template/job correction flow and require inspection again for active runs. Actual readings and quantities are retained.
+
+Deploy updated backend services/routes and scripts before the web/app update. Normal backend startup runs `migrateUnit1Coils`, which includes `migrateUnit1PunchNames`. Alternatively run the normal migration command with the deployment's database environment: `node scripts/migrateUnit1Coils.js`. Restart the backend after uploading all files. Do not reimport clean-install SQL over an existing database.
+
+The migration adds `unit1_job_card_holes.punch_name` and `unit1_punch_name_revisions`. Existing A-E labels are inferred using the old size order, and stored inspection letters are retained. Original JSON/rows are saved in the revision table in the same transaction. Legacy groups beyond E remain unnamed and need an explicit A-E selection when edited; no actual measurements or production quantities are fabricated. Existing plan input snapshots remain historical originals. Clean-install SQL files include the new schema.
+
+Validation: Unit 1 backend tests (175 passed, 16 optional DB tests skipped), targeted real MySQL planning/correction and migration/idempotency checks, native/web form parity and selector tests, Android Metro export, web production build and verified Hostinger ZIP. Local migration preserved production runs, bundle weights and stock movements. Live Hostinger data and Expo channel have not been updated.

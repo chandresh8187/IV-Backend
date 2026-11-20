@@ -20,3 +20,12 @@ test('settings changes use the shared event without a production legacy event', 
   publishUnit1Change(req, 'materials', { action: 'updated' });
   assert.deepEqual(events, ['unit1:data:changed']);
 });
+
+test('maintenance events use their own authorized room', () => {
+  const events=[];
+  const req={app:{get:()=>({to:room=>({emit:(name,payload)=>events.push({room,name,payload})})})}};
+  publishUnit1Change(req,'maintenance',{action:'updated',id:3});
+  assert.equal(events.length,1);
+  assert.equal(events[0].room,'unit1:maintenance');
+  assert.equal(events[0].payload.resource,'maintenance');
+});

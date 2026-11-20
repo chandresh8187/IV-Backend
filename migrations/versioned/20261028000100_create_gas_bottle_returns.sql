@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS gas_bottle_returns (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  request_key VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  bottle_id BIGINT UNSIGNED NOT NULL,
+  position_no TINYINT UNSIGNED NOT NULL,
+  run_id BIGINT UNSIGNED NULL,
+  was_used TINYINT(1) NOT NULL,
+  returned_at DATETIME NOT NULL,
+  reason VARCHAR(255) NOT NULL,
+  actor_user_id INT NOT NULL,
+  before_data LONGTEXT NOT NULL,
+  after_data LONGTEXT NOT NULL,
+  original_input LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_gas_return_request (request_key),
+  KEY idx_gas_return_bottle (bottle_id),
+  CONSTRAINT fk_gas_return_bottle FOREIGN KEY (bottle_id) REFERENCES gas_bottles(id),
+  CONSTRAINT fk_gas_return_run FOREIGN KEY (run_id) REFERENCES gas_bottle_runs(id),
+  CONSTRAINT fk_gas_return_actor FOREIGN KEY (actor_user_id) REFERENCES users(id)
+) ENGINE=InnoDB;

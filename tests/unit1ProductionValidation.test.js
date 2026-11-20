@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PRODUCTS, positiveId, validateStart, validateOutput } = require('../services/unit1ProductionValidation');
 
-test('production supports the three roll formed products', () => {
-  assert.deepEqual(PRODUCTS.map(product => product.key), ['w_beam_crash_barrier', 'solar_mounting_structure', 'gl_hat_purlin']);
+test('production supports all four Unit 1 roll formed products', () => {
+  assert.deepEqual(PRODUCTS.map(product => product.key), ['w_beam_crash_barrier', 'solar_mounting_structure', 'gl_hat_purlin', 'purlin_c_lip']);
 });
 
 test('run start needs one machine, one physical coil, and a supported product', () => {

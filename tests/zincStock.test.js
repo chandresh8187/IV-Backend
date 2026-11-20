@@ -89,7 +89,7 @@ test('new migrations each contain one safe additive statement', () => {
   }
 });
 
-function controllerFixture({ failLedger = false } = {}) {
+function controllerFixture({ failLedger = false, laterReceiptRate = null } = {}) {
   let stock = { ...initial }, ledger = [], working, staged;
   const events = [], calls = [];
   const query = async (sql, params = []) => {
@@ -97,13 +97,15 @@ function controllerFixture({ failLedger = false } = {}) {
     if (sql.startsWith('INSERT IGNORE')) return [{}];
     if (sql.includes('SELECT * FROM zinc_stock')) return [[{ ...(working || stock) }]];
     if (sql.includes('SELECT request_hash')) return [ledger.filter(row => row.request_id === params[0])];
+    if (sql.includes('SELECT zinc_rate_per_kg FROM zinc_stock_movements')) return [laterReceiptRate == null ? [] : [{ zinc_rate_per_kg: laterReceiptRate }]];
+    if (sql.includes('INSERT INTO zinc_purchases')) return [{}];
     if (sql.startsWith('UPDATE zinc_stock')) {
       const [plant_kg, kettle_kg, kg_per_mm, current_zinc_rate, revision] = params;
       working = { initialized: 1, plant_kg, kettle_kg, kg_per_mm, current_zinc_rate, revision }; return [{}];
     }
     if (sql.includes('INSERT INTO zinc_stock_movements')) {
       if (failLedger) throw Object.assign(new Error('Ledger unavailable'), { status: 503 });
-      staged.push({ request_id: params[0], request_hash: params[1], zinc_rate_per_kg: params[4], batch_number: params[9], invoice_number: params[10] }); return [{}];
+      staged.push({ request_id: params[0], request_hash: params[1], zinc_rate_per_kg: params[4], batch_number: params[9], invoice_number: params[10], transaction_date: params[11], transaction_time: params[12] }); return [{}];
     }
     throw new Error('Unexpected query');
   };
@@ -118,6 +120,8 @@ function controllerFixture({ failLedger = false } = {}) {
         ? { getConnection: async () => conn, query }
         : name === '../services/permissionService'
           ? { hasPermission: async () => true }
+          : name === '../services/zincPurchaseService'
+            ? require('../services/zincPurchaseService')
           : name === '../services/stockAlertService'
             ? { checkStockAlerts: async () => {}, ZINC_LIMIT_KG: 6000 }
           : service,
@@ -146,6 +150,40 @@ test('reusing an ID for a different transfer and stale concurrent saves are reje
   assert.equal((await f.run(body({ request_id: 'zinc_test_request_0002' }))).code, 409);
   assert.equal(f.getStock().plant_kg, 8989);
 });
+
+test('dated kettle transfer persists its date, retries once and rejects changed dates', async () => {
+  const f = controllerFixture();
+  const data = body({ transaction_date: '2026-10-27' });
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getLedger()[0].transaction_date, '2026-10-27');
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getLedger().length, 1);
+  assert.equal((await f.run({ ...data, transaction_date: '2026-10-28' })).code, 409);
+  assert.equal(f.getStock().kettle_kg, 1000);
+});
+
+test('transfer dates reject invalid and future dates; older clients keep the recording date', () => {
+  assert.equal(service.normalizeMovement(body()).transaction_date, undefined);
+  for (const date of ['', '2026-02-30', '27/10/2026', '2999-01-01', 27]) {
+    assert.throws(() => service.normalizeMovement(body({ transaction_date: date })), /valid transfer date/);
+  }
+  assert.throws(() => service.normalizeMovement(body({ action: 'adjust', transaction_date: '2026-10-27' })), /only supported for receipts and kettle transfers/);
+});
+
+test('transfer time is persisted, included in retry identity and validated in IST', async () => {
+  const f = controllerFixture();
+  const data = body({ transaction_date: '2026-10-27', transaction_time: '14:35' });
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getLedger()[0].transaction_time, '14:35');
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal((await f.run({ ...data, transaction_time: '14:36' })).code, 409);
+  assert.equal(f.getLedger().length, 1);
+  for (const time of ['', '24:00', '12:60', '2:30 PM', '9:30', 1435]) {
+    assert.throws(() => service.normalizeMovement({ ...data, transaction_time: time }), /valid transfer time/);
+  }
+  assert.throws(() => service.normalizeMovement(body({ transaction_time: '14:35' })), /transfer date/);
+  assert.equal(service.normalizeMovement(body({ transaction_date: '2026-10-27' })).transaction_time, undefined);
+});
 test('failed ledger insert rolls back both balances and emits no update', async () => {
   const f = controllerFixture({ failLedger: true });
   assert.equal((await f.run(body())).code, 503);
@@ -162,6 +200,29 @@ test('receiving zinc saves its purchase rate on stock and the receipt ledger', a
   assert.equal(f.getStock().kettle_kg, 0);
   assert.equal(f.getStock().current_zinc_rate, 242.75);
   assert.equal(f.getLedger()[0].zinc_rate_per_kg, 242.75);
+});
+
+test('backdated plant receipt saves date/time and price atomically and cannot be retried with a changed date', async () => {
+  const f = controllerFixture();
+  const data = body({ action: 'receive', amount_kg: 500, zinc_rate_per_kg: 242.75, transaction_date: '2026-10-27', transaction_time: '09:15' });
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getStock().plant_kg, 10489);
+  assert.equal(f.getStock().kettle_kg, 0);
+  assert.equal(f.getLedger()[0].transaction_date, '2026-10-27');
+  assert.equal(f.getLedger()[0].transaction_time, '09:15');
+  assert.equal(f.getStock().current_zinc_rate, 242.75);
+  assert.equal((await f.run(data)).code, 200);
+  assert.equal(f.getLedger().length, 1);
+  assert.equal((await f.run({ ...data, transaction_date: '2026-10-28' })).code, 409);
+});
+
+test('older plant receipt preserves a newer receipt rate for current recovery calculations', async () => {
+  const f = controllerFixture({ laterReceiptRate: 461.71 });
+  const result = await f.run(body({ action: 'receive', amount_kg: 500, zinc_rate_per_kg: 242.75, transaction_date: '2026-10-27', transaction_time: '09:15' }));
+  assert.equal(result.code, 200);
+  assert.equal(f.getLedger()[0].zinc_rate_per_kg, 242.75);
+  assert.equal(f.getStock().current_zinc_rate, 461.71);
+  assert.equal(result.body.data.current_zinc_rate, 461.71);
 });
 
 

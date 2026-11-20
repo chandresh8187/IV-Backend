@@ -146,7 +146,9 @@ io.on("connection", async (socket) => {
     const isUnit1 = socket.user.scope === 'unit1';
     if (!isUnit1) socket.join(`user:${socket.user.id}`);
     const productionAllowed = isUnit1 && await hasPermission({ userId: socket.user.id, role: socket.user.role, permissionKey: 'unit1.production.view', queryable: unit1Db }).catch(() => false);
+    const maintenanceAllowed = isUnit1 && await hasPermission({userId:socket.user.id,role:socket.user.role,permissionKey:'unit1.maintenance.view',queryable:unit1Db}).catch(()=>false);
     if (productionAllowed) socket.join('unit1:production');
+    if (maintenanceAllowed) socket.join('unit1:maintenance');
     if (isUnit1) return socket.emit('socket_connected', { success: true, user_id: socket.user.id });
     const chatAllowed = await hasPermission({ userId: socket.user.id, role: socket.user.role, permissionKey: 'chat.view' }).catch(() => false);
     if (chatAllowed) {
@@ -180,9 +182,13 @@ app.use("/api/auth", require("./routes/authRoutes"));
 app.use('/api/unit1/auth', require('./routes/unit1AuthRoutes'));
 app.use('/api/unit1/users', require('./routes/unit1UserRoutes'));
 app.use('/api/unit1/notifications', require('./routes/unit1NotificationRoutes'));
+app.use('/api/unit1/material-register', require('./routes/unit1MaterialRegisterRoutes'));
+app.use('/api/unit1/qr-scan', require('./routes/unit1QrScanRoutes'));
 app.use("/api/unit1/coils", require("./routes/unit1CoilRoutes"));
+app.use("/api/unit1/vendors", require("./routes/unit1VendorRoutes"));
 app.use("/api/unit1/materials-grades", require("./routes/unit1MaterialGradeRoutes"));
 app.use("/api/unit1/qr-settings", require("./routes/unit1QrSettingsRoutes"));
+app.use("/api/unit1/maintenance", require("./routes/unit1MaintenanceRoutes"));
 app.use("/api/unit1/machines", require("./routes/unit1MachineRoutes"));
 app.use("/api/unit1/shifts", require("./routes/unit1ShiftRoutes"));
 app.use("/api/unit1/production", require("./routes/unit1ProductionRoutes"));
@@ -288,6 +294,10 @@ const startServer = async () => {
 
   setInterval(sweepTimers, 1000).unref();
   sweepTimers();
+  let maintenanceRunning=false;
+  const checkMaintenance=async()=>{if(maintenanceRunning)return;maintenanceRunning=true;try{await require('./services/unit1MaintenanceReminders').sendMaintenanceReminders();}catch(e){console.error('Maintenance reminder check failed:',e.code || e.message);}finally{maintenanceRunning=false;}};
+  setInterval(checkMaintenance,300000).unref();
+  checkMaintenance();
   setInterval(checkStocks, 30000).unref();
   checkStocks();
 
